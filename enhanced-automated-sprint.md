@@ -32,10 +32,16 @@ This skill uses BMAD config variables from `{project-root}/_bmad/bmm/config.yaml
 
 | Variable | Source | Used For |
 |----------|--------|----------|
-| `{output_folder}` | config.yaml | Story files, sprint status, planning artifacts |
-| `{user_name}` | config.yaml | Agent greetings and communication |
-| `{communication_language}` | config.yaml | Agent output language |
 | `{project-root}` | runtime | All file path resolution |
+| `{project_name}` | config.yaml | Project identification |
+| `{output_folder}` | config.yaml | Base output directory for all artifacts |
+| `{planning_artifacts}` | config.yaml | Epic files, PRDs, story specs |
+| `{implementation_artifacts}` | config.yaml | Sprint status, test reports, trace reports |
+| `{project_knowledge}` | config.yaml | Project documentation directory |
+| `{user_name}` | config.yaml | Agent greetings and communication |
+| `{user_skill_level}` | config.yaml | Agent communication complexity |
+| `{communication_language}` | config.yaml | Agent output language |
+| `{document_output_language}` | config.yaml | Written artifact language |
 
 ### Project-Specific Verification Commands
 
@@ -51,6 +57,41 @@ lint_command: "npm run lint"                # optional, add to verification if p
 ```
 
 The coordinator reads these from the project's `CLAUDE.md` or `package.json` scripts. If not found, fall back to the defaults above.
+
+### Agent Environment Block
+
+<env-block CRITICAL="TRUE">
+The coordinator MUST include this resolved context block at the START of **every** agent prompt. This is environment configuration, NOT conversation history — Rule #2 does not apply to it.
+
+The coordinator resolves ALL variables from Phase 0 config and runtime discovery before inserting into prompts. Referenced as `${BMAD_ENV_BLOCK}` in agent spawn templates below.
+
+```
+## BMAD Environment
+- project_root: {project-root}
+- project_name: {project_name}
+- output_folder: {output_folder}
+- planning_artifacts: {planning_artifacts}
+- implementation_artifacts: {implementation_artifacts}
+- project_knowledge: {project_knowledge}
+- user_name: {user_name}
+- user_skill_level: {user_skill_level}
+- communication_language: {communication_language}
+- document_output_language: {document_output_language}
+
+## Verification Commands
+- test_command: ${test_command}
+- test_list_command: ${test_list_command}
+- typecheck_command: ${typecheck_command}
+- build_command: ${build_command}
+- lint_command: ${lint_command}
+
+## Pipeline Context
+- epic_id: ${EPIC_ID}
+- working_branch: ${WORKING_BRANCH}
+```
+
+The coordinator expands `${BMAD_ENV_BLOCK}` to the fully resolved block above at spawn time. Every agent receives the same environment. No variable is withheld.
+</env-block>
 
 ## Input Format
 
@@ -76,20 +117,23 @@ $ARGUMENTS = <EPIC_ID> [STORY_IDS...] [--parallel N] [--skip-elicitation] [--aut
 <rules CRITICAL="TRUE">
 Before ANY pipeline work begins, the coordinator MUST:
 
-1. **Load BMAD config** — read `{project-root}/_bmad/bmm/config.yaml` and resolve `{output_folder}`, `{user_name}`, `{communication_language}`
-2. **Parse `$ARGUMENTS`** — extract EPIC_ID, optional STORY_IDS, and flags
-3. **Read sprint-status.yaml** at `{output_folder}/implementation-artifacts/sprint-status.yaml`
-4. **Identify target stories:**
+1. **Load BMAD config** — read `{project-root}/_bmad/bmm/config.yaml` and resolve ALL variables: `{project_name}`, `{output_folder}`, `{planning_artifacts}`, `{implementation_artifacts}`, `{project_knowledge}`, `{user_name}`, `{user_skill_level}`, `{communication_language}`, `{document_output_language}`
+2. **Resolve verification commands** — read `CLAUDE.md` or `package.json` scripts to determine `${test_command}`, `${test_list_command}`, `${typecheck_command}`, `${build_command}`, `${lint_command}`. Fall back to defaults if not found.
+3. **Determine working branch** — run `git branch --show-current` and store as `${WORKING_BRANCH}`
+4. **Build `${BMAD_ENV_BLOCK}`** — expand the Agent Environment Block template with all resolved values. This block is injected into every agent prompt for the rest of the pipeline.
+5. **Parse `$ARGUMENTS`** — extract EPIC_ID, optional STORY_IDS, and flags
+6. **Read sprint-status.yaml** at `{implementation_artifacts}/sprint-status.yaml`
+7. **Identify target stories:**
    - If STORY_IDS provided: use exactly those
    - If only EPIC_ID: collect all stories with status `ready-for-dev` or `backlog` (skip `done`, `in-progress`)
-5. **Read the epic file** at `{output_folder}/planning-artifacts/epic-${EPIC_ID}.md` to understand story dependencies and ordering
-6. **Determine story execution order:**
+8. **Read the epic file** at `{planning_artifacts}/epic-${EPIC_ID}.md` to understand story dependencies and ordering
+9. **Determine story execution order:**
    - Stories with no inter-story dependencies can run in parallel (up to `--parallel N`)
    - Stories that depend on other stories in the batch must run after their dependency completes
    - Default: sequential in story number order
-7. **Size check:** If any story is Size M or larger, warn the user and suggest breaking it into Size S stories before proceeding
-8. **Create the task list** using TaskCreate (see Task Structure below)
-9. **Present the plan** to the user and wait for approval before proceeding
+10. **Size check:** If any story is Size M or larger, warn the user and suggest breaking it into Size S stories before proceeding
+11. **Create the task list** using TaskCreate (see Task Structure below)
+12. **Present the plan** to the user and wait for approval before proceeding
 </rules>
 
 ## Task Structure
@@ -231,7 +275,7 @@ Step 12 delegates to `/bmad-bmm-sprint-status` and runs sequentially (shared `sp
 
 <rules CRITICAL="TRUE">
 1. **Act as COORDINATOR** — delegate all work via Task tool agents, do NOT execute pipeline steps yourself
-2. **One agent per step** — each step spawns a focused Task agent with ONLY the context it needs (story file path, test file paths, etc.). Do NOT pass full conversation history.
+2. **One agent per step** — each step spawns a focused Task agent. Do NOT pass full conversation history. DO pass `${BMAD_ENV_BLOCK}` to every agent — environment variables are configuration, not history.
 3. **PARALLEL by default** — when multiple tasks are unblocked AND parallelizable (see Sequential Gate Rules above), spawn them ALL in a single message. This is the core performance advantage of the enhanced pipeline.
 4. **TaskUpdate before and after** — mark task `in_progress` BEFORE spawning the agent, mark `completed` AFTER agent succeeds
 5. **TaskList after each wave** — check what's unblocked next
@@ -247,7 +291,7 @@ Step 12 delegates to `/bmad-bmm-sprint-status` and runs sequentially (shared `sp
 
 ### Focused Agent Pattern
 
-Each agent gets a **minimal, focused prompt** — only what it needs, no pipeline history.
+Each agent gets a **minimal, focused prompt** plus the full `${BMAD_ENV_BLOCK}` — only step-specific context varies, environment is always included.
 
 **NOTE:** Templates below are pseudo-code showing the Task tool parameters. The coordinator translates these to actual Task tool calls with JSON parameters. All named parameters (`description`, `subagent_type`, `model`, `isolation`, `prompt`) are real Task tool parameters. The `←` inline comments are documentation only — do not include them in actual tool calls.
 
@@ -260,13 +304,15 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Run the BMAD create-story workflow for story ${SID}.
     Execute: /bmad-bmm-create-story ${SID}
 
-    Epic file: {output_folder}/planning-artifacts/epic-${EPIC_ID}.md
-    Sprint status: {output_folder}/implementation-artifacts/sprint-status.yaml
+    Epic file: {planning_artifacts}/epic-${EPIC_ID}.md
+    Sprint status: {implementation_artifacts}/sprint-status.yaml
 
-    Report back:
+    Return to coordinator:
     - Story file path created
     - AC count and 1-line summary each
     - Task breakdown count
@@ -280,16 +326,18 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     You are enhancing story ${SID} via advanced elicitation. This is FULLY AUTOMATED.
 
     1. Read the story file at: ${STORY_FILE_PATH}
     2. Read methods CSV at: {project-root}/_bmad/core/workflows/advanced-elicitation/methods.csv
     3. Auto-select the 3 methods most relevant to this story's context
     4. Apply each method in sequence to enhance the story
-    5. Save the enhanced story file (overwrite)
+    5. Save the enhanced story file (overwrite at ${STORY_FILE_PATH})
     6. Report ONLY THE DELTA — what changed, section by section
 
-    Do NOT return the full story file.
+    Return to coordinator: section-by-section delta summary. Do NOT return the full story file.
 ```
 
 #### Step 3: Validate Story
@@ -299,13 +347,15 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Validate story ${SID} against its epic.
     Execute: /bmad-bmm-create-story validate ${SID}
 
     Story file: ${STORY_FILE_PATH}
-    Epic file: {output_folder}/planning-artifacts/epic-${EPIC_ID}.md
+    Epic file: {planning_artifacts}/epic-${EPIC_ID}.md
 
-    Report: PASS/FAIL, AC match count, scope drift, missing ACs, action items.
+    Return to coordinator: PASS/FAIL, AC match count, scope drift, missing ACs, action items.
 ```
 
 #### Step 4: TDD Test Generation
@@ -315,12 +365,21 @@ Task tool:
   subagent_type: general-purpose
   model: sonnet
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Generate TDD tests for story ${SID}.
     Execute: /bmad-bmm-qa-automate TDD ${SID} yolo
 
     Story file: ${STORY_FILE_PATH}
 
-    Report: test file paths, test count, AC coverage, red phase confirmation.
+    Save TDD test report to: {implementation_artifacts}/${SID}-tdd-test-report.md
+
+    Return to coordinator:
+    - Test file paths created
+    - Test count
+    - AC coverage (which ACs are covered by which tests)
+    - Red phase confirmation (all tests fail as expected)
+    - Report file path: {implementation_artifacts}/${SID}-tdd-test-report.md
 ```
 
 #### Step 5: Implementation (Worktree Isolated)
@@ -331,13 +390,21 @@ Task tool:
   model: sonnet
   isolation: "worktree"          ← agent gets its own repo copy (only when parallel)
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Implement story ${SID} to pass all TDD tests.
     Execute: /bmad-bmm-dev-story ${SID} yolo
 
     Story file: ${STORY_FILE_PATH}
     Test files: ${TEST_FILE_PATHS}
 
-    Report: files changed/created, test results, typecheck status, build status, key decisions.
+    Return to coordinator:
+    - Files changed/created
+    - Test results (count passing, count failing)
+    - Typecheck status
+    - Build status
+    - Key implementation decisions
+
     IMPORTANT: Your changes are in a worktree branch. Do NOT merge — the coordinator handles merging.
 ```
 
@@ -350,6 +417,8 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     You are Amelia, the BMAD Developer Agent — a Senior Software Engineer.
     Your identity: Execute with strict adherence to story details and team standards.
     Your communication style: Ultra-succinct. Speak in file paths and AC IDs — every statement citable. No fluff, all precision.
@@ -361,7 +430,7 @@ Task tool:
 
     ## Context
     - Worktree branch: ${WORKTREE_BRANCH} (from Step 5 result)
-    - Target branch: ${WORKING_BRANCH} (the sprint's working branch)
+    - Target branch: ${WORKING_BRANCH}
     - Story: ${SID}
     - Story file: ${STORY_FILE_PATH}
 
@@ -403,7 +472,7 @@ Task tool:
        - If Task tool auto-cleaned the worktree: skip removal
        - If worktree still exists: git worktree remove ${WORKTREE_PATH} && git branch -d ${WORKTREE_BRANCH}
 
-    ## Report Back
+    ## Return to coordinator
     - Merge result: clean / conflicts resolved / BLOCKED (ambiguous conflict)
     - Conflicts: [list files if any, with resolution summary]
     - Post-merge tests: [count] passing (pre-merge: [count], delta: +[N])
@@ -420,6 +489,8 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Code review story ${SID} implementation.
     Execute: /bmad-bmm-code-review ${SID} yolo
 
@@ -427,7 +498,7 @@ Task tool:
     Implementation files: ${IMPL_FILE_PATHS}
     Test files: ${TEST_FILE_PATHS}
 
-    Report: verdict, issues table (# | severity | issue | fix), AC verification count, action item count.
+    Return to coordinator: verdict, issues table (# | severity | issue | fix), AC verification count, action item count.
 ```
 
 #### Step 8: Adversarial Review
@@ -437,6 +508,8 @@ Task tool:
   subagent_type: general-purpose
   model: opus
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Cynical adversarial review of the full delivery for story ${SID}.
     Execute: /bmad-review-adversarial-general
 
@@ -445,7 +518,7 @@ Task tool:
     - Implementation: ${IMPL_FILE_PATHS}
     - Tests: ${TEST_FILE_PATHS}
 
-    Report: findings table (# | severity | category | finding | recommendation), critical count, total count.
+    Return to coordinator: findings table (# | severity | category | finding | recommendation), critical count, total count.
 ```
 
 #### Step 9: Fix Action Items (Conditional, Worktree Isolated)
@@ -456,6 +529,8 @@ Task tool:
   model: sonnet
   isolation: "worktree"          ← fixes run in isolated worktree (only when parallel)
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Fix the following action items from code review and adversarial review for story ${SID}.
 
     Items to fix:
@@ -469,7 +544,7 @@ Task tool:
     2. Run: ${typecheck_command} (must be clean)
     3. Run: ${build_command} (must succeed)
 
-    Report: each fix with before/after, test count, typecheck status, build status.
+    Return to coordinator: each fix with before/after, test count, typecheck status, build status.
     IMPORTANT: Your changes are in a worktree branch. Do NOT merge — the coordinator handles merging.
 ```
 
@@ -481,6 +556,7 @@ Same agent template as Step 6 (Amelia, Senior Software Engineer persona), but wi
 - Description: `"[${SID}] Dev merge fixes"`
 - Commit message: `"fix: merge story ${SID} review fixes"`
 - Worktree branch/path from Step 9 result
+- `${BMAD_ENV_BLOCK}` included in prompt (same as Step 6)
 
 #### Step 11: AC Trace
 ```
@@ -489,6 +565,8 @@ Task tool:
   subagent_type: general-purpose
   model: sonnet
   prompt: |
+    ${BMAD_ENV_BLOCK}
+
     Trace all acceptance criteria to test coverage for story ${SID}.
     Execute: /bmad-bmm-qa-automate TRACE ${SID} yolo
 
@@ -496,7 +574,14 @@ Task tool:
     Test files: ${TEST_FILE_PATHS}
     Implementation files: ${IMPL_FILE_PATHS}
 
-    Report: AC trace matrix, total tests passing, gaps, implementation file list.
+    Save AC trace report to: {implementation_artifacts}/${SID}-ac-trace-report.md
+
+    Return to coordinator:
+    - AC trace matrix (AC ID → test file:test name → PASS/FAIL)
+    - Total tests passing
+    - Coverage gaps (ACs without test coverage)
+    - Implementation file list
+    - Report file path: {implementation_artifacts}/${SID}-ac-trace-report.md
 ```
 
 ## Step Output Requirements
