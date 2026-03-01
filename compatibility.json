@@ -1,0 +1,13 @@
+{
+  "versions": {
+    "6.0.3": {
+      "bmad_version": "6.0.3",
+      "scripts": [
+        "enhanced-automated-sprint.md",
+        "claude-hotfix-interaction-style.md"
+      ],
+      "changelog": "Fix Tasks/Subtasks not being populated or updated in story files during enhanced sprint pipeline"
+    }
+  },
+  "latest": "6.0.3"
+}
