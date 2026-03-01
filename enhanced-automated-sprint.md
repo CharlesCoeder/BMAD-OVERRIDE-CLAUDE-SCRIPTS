@@ -282,6 +282,7 @@ Step 12 delegates to `/bmad-bmm-sprint-status` and runs sequentially (shared `sp
 6. **Failure stops the STORY, not the sprint** — if a step fails for one story, mark it failed, report to user, but continue with other stories if they're independent
 7. **Context budget per agent:** Each agent should read at most 5-8 files. If a step needs more context, break it into sub-agents.
 8. **Steps 9 + 10 are conditional** — only create a fix agent if Steps 7 or 8 produced action items. If no items, mark BOTH 9 AND 10 as completed immediately and proceed to Step 11.
+8a. **Tasks/Subtasks validation gate** — after Step 5 completes, the coordinator MUST check the agent's return for "Tasks/Subtasks completion". If the agent reports incomplete tasks or does NOT confirm story file was updated, the coordinator MUST flag this to the user before proceeding. The story file's `## Tasks / Subtasks` section is the source of truth for implementation completeness — test results alone are NOT sufficient.
 9. **Step 12 uses BMAD** — delegate to `/bmad-bmm-sprint-status` to update sprint-status.yaml, one story at a time (sequential)
 10. **Progress checkpoints** — after every wave, output a progress summary to the user
 11. **If context feels heavy** — after completing a full story's pipeline, output a handoff summary and suggest the user refresh the session if more stories remain
@@ -312,10 +313,20 @@ Task tool:
     Epic file: {planning_artifacts}/epic-${EPIC_ID}.md
     Sprint status: {implementation_artifacts}/sprint-status.yaml
 
+    CRITICAL: The "## Tasks / Subtasks" section in the story file MUST be populated with real,
+    actionable implementation tasks derived from the Acceptance Criteria — NOT left as template
+    placeholders like "Task 1 (AC: #)". Each task must:
+    - Map to one or more specific ACs (e.g., "- [ ] Set up Express server with health endpoint (AC: 1, 2)")
+    - Be broken into subtasks where the task involves multiple discrete actions
+    - Use checkbox format: "- [ ] Task description (AC: #)"
+
+    After the create-story workflow completes, VERIFY the Tasks/Subtasks section contains real tasks.
+    If it still has template placeholders, rewrite the section based on the ACs before returning.
+
     Return to coordinator:
     - Story file path created
     - AC count and 1-line summary each
-    - Task breakdown count
+    - Task breakdown count (MUST be > 0 with real task descriptions, not placeholders)
     - Any blockers or questions
 ```
 
@@ -336,6 +347,10 @@ Task tool:
     4. Apply each method in sequence to enhance the story
     5. Save the enhanced story file (overwrite at ${STORY_FILE_PATH})
     6. Report ONLY THE DELTA — what changed, section by section
+
+    CRITICAL: After elicitation, verify the "## Tasks / Subtasks" section still contains real,
+    actionable tasks with checkbox format (- [ ] Task description (AC: #)). If elicitation
+    accidentally removed or degraded the tasks section, restore it with properly mapped tasks.
 
     Return to coordinator: section-by-section delta summary. Do NOT return the full story file.
 ```
@@ -392,11 +407,30 @@ Task tool:
   prompt: |
     ${BMAD_ENV_BLOCK}
 
-    Implement story ${SID} to pass all TDD tests.
+    Implement story ${SID} by following the story file's Tasks/Subtasks section.
     Execute: /bmad-bmm-dev-story ${SID} yolo
 
     Story file: ${STORY_FILE_PATH}
     Test files: ${TEST_FILE_PATHS}
+
+    CRITICAL — STORY FILE TASK TRACKING:
+    The story file at ${STORY_FILE_PATH} contains a "## Tasks / Subtasks" section with checkboxes.
+    You MUST follow the dev-story workflow's task-driven implementation loop:
+    1. Find the first incomplete task (unchecked [ ]) in "Tasks / Subtasks"
+    2. Implement that specific task (use existing TDD tests from ${TEST_FILE_PATHS} as verification)
+    3. When the task's tests pass AND implementation matches the task spec, mark it [x] in the story file
+    4. Update the story file's "Dev Agent Record" and "File List" sections
+    5. Loop back to step 1 until ALL tasks/subtasks are marked [x]
+
+    NOTE: TDD tests already exist from a prior pipeline step. Use them as your verification —
+    do NOT regenerate tests that already exist. You may add additional tests if the existing
+    TDD tests do not cover a specific task's requirements.
+
+    After ALL tasks are complete, save the story file with:
+    - All Tasks/Subtasks checkboxes marked [x]
+    - Updated File List with all changed/created files
+    - Dev Agent Record with implementation notes
+    - Status updated to "review"
 
     Return to coordinator:
     - Files changed/created
@@ -404,6 +438,8 @@ Task tool:
     - Typecheck status
     - Build status
     - Key implementation decisions
+    - Tasks/Subtasks completion: [count completed]/[total count] — ALL must be [x]
+    - Story file updated: YES/NO (MUST be YES)
 
     IMPORTANT: Your changes are in a worktree branch. Do NOT merge — the coordinator handles merging.
 ```
@@ -543,8 +579,11 @@ Task tool:
     1. Run: ${test_command} (all tests must pass)
     2. Run: ${typecheck_command} (must be clean)
     3. Run: ${build_command} (must succeed)
+    4. Update the story file's "## Tasks / Subtasks" section:
+       - If a "Review Follow-ups (AI)" subsection was added by code review, mark fixed items [x]
+       - Ensure ALL original task checkboxes remain [x] (do not regress them)
 
-    Return to coordinator: each fix with before/after, test count, typecheck status, build status.
+    Return to coordinator: each fix with before/after, test count, typecheck status, build status, story file Tasks/Subtasks status.
     IMPORTANT: Your changes are in a worktree branch. Do NOT merge — the coordinator handles merging.
 ```
 
