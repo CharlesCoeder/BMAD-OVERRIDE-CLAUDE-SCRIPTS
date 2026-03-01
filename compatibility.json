@@ -14,7 +14,7 @@
         "enhanced-automated-sprint.md",
         "claude-hotfix-interaction-style.md"
       ],
-      "changelog": "Compatible with BMAD 6.0.4. No script changes needed — core workflows identical to 6.0.3. BMAD 6.0.4 changes: @{project-root} prefix removed, AskUserQuestion critical_action removed from agents, new edge-case-hunter review task added."
+      "changelog": "Added Step 8b (Edge Case Hunter review) — runs in parallel with code review and adversarial review. Leverages new BMAD 6.0.4 review-edge-case-hunter.xml task for method-driven path enumeration."
     }
   },
   "latest": "6.0.4"

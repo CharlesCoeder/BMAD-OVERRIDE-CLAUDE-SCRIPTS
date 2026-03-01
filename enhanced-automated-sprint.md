@@ -5,7 +5,7 @@ description: 'Run the full BMAD pipeline for multiple stories in an epic. Breaks
 
 # Enhanced Automated Sprint Pipeline
 
-> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create → refine → validate → write tests → implement → code review → adversarial review → fix issues → verify → update sprint status**. Stories can run in parallel when independent. You approve the plan upfront and get prompted at key decision points (story review, fix prioritization, failures). Everything else is hands-off.
+> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create → refine → validate → write tests → implement → code review → adversarial review → edge case hunt → fix issues → verify → update sprint status**. Stories can run in parallel when independent. You approve the plan upfront and get prompted at key decision points (story review, fix prioritization, failures). Everything else is hands-off.
 >
 > **Usage:** `/enhanced-automated-sprint 7` or `/enhanced-automated-sprint 7 7-1 7-2 --parallel 2`
 >
@@ -19,6 +19,7 @@ description: 'Run the full BMAD pipeline for multiple stories in an epic. Breaks
 > | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | No (sequential) |
 > | 7 | Code review | `/bmad-bmm-code-review` | Opus | Yes |
 > | 8 | Adversarial review | `/bmad-review-adversarial-general` | Opus | Yes |
+> | 8b | Edge case hunter review | `/bmad-review-edge-case-hunter` | Sonnet | Yes (parallel with 7,8) |
 > | 9 | Fix review action items | _(targeted fixes)_ | Sonnet | Yes (worktree) |
 > | 10 | Merge fix branch | _(Amelia dev agent)_ | Opus | No (sequential) |
 > | 11 | Trace ACs to test coverage | `/bmad-bmm-qa-automate TRACE` | Sonnet | Yes |
@@ -160,7 +161,8 @@ For story `${SID}`:
 | `[${SID}] Step 6: Merge implementation` | `Merging ${SID} implementation to main branch` | `[${SID}] Step 5: Implementation` |
 | `[${SID}] Step 7: Code review` | `Reviewing code for ${SID}` | `[${SID}] Step 6: Merge implementation` |
 | `[${SID}] Step 8: Adversarial review` | `Adversarial review of ${SID}` | `[${SID}] Step 7: Code review` |
-| `[${SID}] Step 9: Fix action items` | `Fixing review items for ${SID}` | `[${SID}] Step 8: Adversarial review` |
+| `[${SID}] Step 8b: Edge case hunter` | `Edge case hunting for ${SID}` | `[${SID}] Step 6: Merge implementation` |
+| `[${SID}] Step 9: Fix action items` | `Fixing review items for ${SID}` | `[${SID}] Step 8: Adversarial review`, `[${SID}] Step 8b: Edge case hunter` |
 | `[${SID}] Step 10: Merge fixes` | `Merging ${SID} review fixes to main branch` | `[${SID}] Step 9: Fix action items` |
 | `[${SID}] Step 11: AC trace` | `Tracing ACs for ${SID}` | `[${SID}] Step 10: Merge fixes` |
 | `[${SID}] Step 12: Update sprint status` | `Updating sprint status for ${SID}` | `[${SID}] Step 11: AC trace` |
@@ -203,7 +205,7 @@ The coordinator runs a **wave-based execution loop**. Each iteration:
    - Step 4 (TDD): **PARALLEL** — safe because test files are story-scoped. Each agent writes only to its own story's test files. If stories share a test file, fall back to SEQUENTIAL for Step 4.
    - Step 5 (implementation): **PARALLEL in worktrees** — `isolation: "worktree"` gives each agent its own repo copy
    - Steps 6, 10 (merges): **SEQUENTIAL** — merge one worktree branch at a time to avoid race conditions
-   - Steps 7, 8 (reviews): **PARALLEL** — read-only analysis
+   - Steps 7, 8, 8b (reviews): **PARALLEL** — read-only analysis
    - Step 9 (fixes): **PARALLEL in worktrees** — same worktree isolation as Step 5
    - Step 11: **PARALLEL** — read-only analysis
    - Step 12: **COORDINATOR-SEQUENTIAL** — delegates to `/bmad-bmm-sprint-status` one story at a time. Two concurrent writes to the same YAML file = data loss.
@@ -223,16 +225,15 @@ Wave 4:  [A-1] Step 4 + [A-2] Step 4       ← parallel (TDD tests)
 Wave 5:  [A-1] Step 5 + [A-2] Step 5       ← parallel IN WORKTREES (both implement concurrently!)
 Wave 6:  [A-1] Step 6                       ← SEQUENTIAL merge (Amelia merges A-1 first)
 Wave 7:  [A-2] Step 6                       ← SEQUENTIAL merge (Amelia merges A-2, resolves conflicts if any)
-Wave 8:  [A-1] Step 7 + [A-2] Step 7       ← parallel (code review)
-Wave 9:  [A-1] Step 8 + [A-2] Step 8       ← parallel (adversarial review)
-Wave 10: [A-1] Step 9 + [A-2] Step 9       ← parallel IN WORKTREES (fixes)
-Wave 11: [A-1] Step 10                      ← SEQUENTIAL merge
-Wave 12: [A-2] Step 10                      ← SEQUENTIAL merge
-Wave 13: [A-1] Step 11 + [A-2] Step 11     ← parallel (AC trace)
-Wave 14: [A-1] Step 12, then [A-2] Step 12 ← COORDINATOR-SEQUENTIAL (same YAML file)
+Wave 8:  [A-1] Step 7 + [A-1] Step 8 + [A-1] Step 8b + [A-2] Step 7 + [A-2] Step 8 + [A-2] Step 8b  ← ALL reviews parallel
+Wave 9:  [A-1] Step 9 + [A-2] Step 9       ← parallel IN WORKTREES (fixes from all reviews)
+Wave 10: [A-1] Step 10                      ← SEQUENTIAL merge
+Wave 11: [A-2] Step 10                      ← SEQUENTIAL merge
+Wave 12: [A-1] Step 11 + [A-2] Step 11     ← parallel (AC trace)
+Wave 13: [A-1] Step 12, then [A-2] Step 12 ← COORDINATOR-SEQUENTIAL (same YAML file)
 ```
 
-**Speedup:** 14 waves vs 20+ sequential steps. Implementation (the longest step) now runs concurrently across stories.
+**Speedup:** 13 waves vs 20+ sequential steps. All 3 reviews (code, adversarial, edge case) run in a single wave. Implementation (the longest step) runs concurrently across stories.
 
 ### How to Spawn Parallel Agents
 
@@ -266,7 +267,7 @@ These are the ONLY serialization points in the pipeline. Merges run one at a tim
 All other steps parallelize freely because they either:
 - Write to story-specific files (Steps 1, 2, 4)
 - Run in isolated worktrees (Steps 5, 9)
-- Are read-only analysis (Steps 3, 7, 8, 11)
+- Are read-only analysis (Steps 3, 7, 8, 8b, 11)
 
 Step 12 delegates to `/bmad-bmm-sprint-status` and runs sequentially (shared `sprint-status.yaml` file).
 </parallel-execution>
@@ -281,7 +282,7 @@ Step 12 delegates to `/bmad-bmm-sprint-status` and runs sequentially (shared `sp
 5. **TaskList after each wave** — check what's unblocked next
 6. **Failure stops the STORY, not the sprint** — if a step fails for one story, mark it failed, report to user, but continue with other stories if they're independent
 7. **Context budget per agent:** Each agent should read at most 5-8 files. If a step needs more context, break it into sub-agents.
-8. **Steps 9 + 10 are conditional** — only create a fix agent if Steps 7 or 8 produced action items. If no items, mark BOTH 9 AND 10 as completed immediately and proceed to Step 11.
+8. **Steps 9 + 10 are conditional** — only create a fix agent if Steps 7, 8, or 8b produced action items. If no items from any review, mark BOTH 9 AND 10 as completed immediately and proceed to Step 11.
 8a. **Tasks/Subtasks validation gate** — after Step 5 completes, the coordinator MUST check the agent's return for "Tasks/Subtasks completion". If the agent reports incomplete tasks or does NOT confirm story file was updated, the coordinator MUST flag this to the user before proceeding. The story file's `## Tasks / Subtasks` section is the source of truth for implementation completeness — test results alone are NOT sufficient.
 9. **Step 12 uses BMAD** — delegate to `/bmad-bmm-sprint-status` to update sprint-status.yaml, one story at a time (sequential)
 10. **Progress checkpoints** — after every wave, output a progress summary to the user
@@ -296,7 +297,7 @@ Each agent gets a **minimal, focused prompt** plus the full `${BMAD_ENV_BLOCK}` 
 
 **NOTE:** Templates below are pseudo-code showing the Task tool parameters. The coordinator translates these to actual Task tool calls with JSON parameters. All named parameters (`description`, `subagent_type`, `model`, `isolation`, `prompt`) are real Task tool parameters. The `←` inline comments are documentation only — do not include them in actual tool calls.
 
-**SKILL INVOCATION WARNING:** Steps 1, 3, 4, 5, 7, and 11 invoke `/bmad-bmm-*` skills inside Task agents. If the Skill tool is not available inside Task agents, the coordinator MUST use a fallback: instead of `Execute: /bmad-bmm-create-story ${SID}`, load the skill's workflow YAML directly and pass its instructions inline in the prompt. The coordinator should test skill availability in Phase 0 by spawning a lightweight probe agent that attempts `/bmad-help` — if it fails, switch all templates to inline-workflow mode.
+**SKILL INVOCATION WARNING:** Steps 1, 3, 4, 5, 7, 8b, and 11 invoke `/bmad-*` skills inside Task agents. If the Skill tool is not available inside Task agents, the coordinator MUST use a fallback: instead of `Execute: /bmad-bmm-create-story ${SID}`, load the skill's workflow YAML directly and pass its instructions inline in the prompt. The coordinator should test skill availability in Phase 0 by spawning a lightweight probe agent that attempts `/bmad-help` — if it fails, switch all templates to inline-workflow mode.
 
 #### Step 1: Create Story
 ```
@@ -557,6 +558,36 @@ Task tool:
     Return to coordinator: findings table (# | severity | category | finding | recommendation), critical count, total count.
 ```
 
+#### Step 8b: Edge Case Hunter Review (BMAD 6.0.4+)
+```
+Task tool:
+  description: "[${SID}] Edge case hunt"
+  subagent_type: general-purpose
+  model: sonnet
+  prompt: |
+    ${BMAD_ENV_BLOCK}
+
+    You are a pure path tracer. Walk every branching path and boundary condition
+    in the implementation for story ${SID}. Report ONLY unhandled edge cases.
+    This is method-driven exhaustive path enumeration, NOT attitude-driven review.
+
+    Read the edge case hunter task definition at:
+    {project-root}/_bmad/core/tasks/review-edge-case-hunter.xml
+
+    Follow its instructions exactly. Scope your analysis to these files:
+    - Implementation: ${IMPL_FILE_PATHS}
+    - Tests: ${TEST_FILE_PATHS}
+
+    also_consider: "Acceptance criteria from story ${SID} at ${STORY_FILE_PATH}"
+
+    Return to coordinator:
+    - JSON array of findings (location, trigger_condition, guard_snippet, potential_consequence)
+    - Total unhandled edge cases found
+    - Critical edge cases count (could cause data loss, crashes, or security issues)
+```
+
+**Coordinator note:** Step 8b runs in PARALLEL with Steps 7 and 8 — all three are read-only analysis. The coordinator spawns all three review agents in a single message for the same story. Step 9 consolidates findings from all three reviews.
+
 #### Step 9: Fix Action Items (Conditional, Worktree Isolated)
 ```
 Task tool:
@@ -567,10 +598,14 @@ Task tool:
   prompt: |
     ${BMAD_ENV_BLOCK}
 
-    Fix the following action items from code review and adversarial review for story ${SID}.
+    Fix the following action items from code review, adversarial review, and edge case
+    hunter review for story ${SID}.
 
     Items to fix:
     ${CONSOLIDATED_ACTION_ITEMS}
+
+    Edge case findings (JSON — add guards for critical ones):
+    ${EDGE_CASE_FINDINGS}
 
     Implementation files: ${IMPL_FILE_PATHS}
     Test files: ${TEST_FILE_PATHS}
@@ -682,7 +717,7 @@ Tasks: X completed / Y total | ETA: ~Z steps remaining
 <decision-rules>
 1. **Step 1 (create-story):** ALWAYS pause for user review of ACs and dev notes before proceeding
 2. **Step 3 (validate):** If FAIL → stop that story, ask user how to proceed
-3. **Steps 7/8 (reviews):** If action items found:
+3. **Steps 7/8/8b (reviews):** If action items found:
    - `--auto-fix`: auto-proceed to Step 9 with all items
    - Default: present items, ask user which to fix (all / medium+ / skip)
 4. **Step failure:** Report error, mark story as blocked, ask user: retry / skip story / stop sprint
@@ -749,6 +784,7 @@ After ALL stories complete (or fail):
 | Step 6: Merge impl | **opus** | — | **BMAD Dev Agent (Amelia)** — senior engineer merge judgment, conflict resolution, post-merge verification |
 | Step 7: Code review | opus | — | Architectural and security judgment |
 | Step 8: Adversarial | opus | — | Cynical content review needs depth |
+| Step 8b: Edge case hunter | sonnet | — | Method-driven path enumeration, speed matters |
 | Step 9: Fixes | sonnet | **worktree** | Targeted fixes in isolation, parallelizable across stories |
 | Step 10: Merge fixes | **opus** | — | **BMAD Dev Agent (Amelia)** — same merge protocol as Step 6 |
 | Step 11: AC trace | sonnet | — | Systematic tracing, speed matters |
