@@ -6,9 +6,10 @@ Various scripts to make your life easier with BMAD for Claude Code.
 
 Scripts are organized by exact BMAD version. The installer auto-detects your BMAD version and picks the right one.
 
-| Folder  | BMAD Version | Scripts                                                   |
-|---------|-------------|-----------------------------------------------------------|
-| `6.0.3` | 6.0.3       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` |
+| Folder  | BMAD Version | Scripts                                                   | Notes |
+|---------|-------------|-----------------------------------------------------------|-------|
+| `6.0.3` | 6.0.3       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Tasks/Subtasks fix |
+| `6.0.4` | 6.0.4       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Same scripts — core workflows unchanged |
 
 Root-level files are kept as a fallback for the latest version.
 

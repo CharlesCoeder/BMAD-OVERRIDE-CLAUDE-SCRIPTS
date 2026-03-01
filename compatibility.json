@@ -7,7 +7,15 @@
         "claude-hotfix-interaction-style.md"
       ],
       "changelog": "Fix Tasks/Subtasks not being populated or updated in story files during enhanced sprint pipeline"
+    },
+    "6.0.4": {
+      "bmad_version": "6.0.4",
+      "scripts": [
+        "enhanced-automated-sprint.md",
+        "claude-hotfix-interaction-style.md"
+      ],
+      "changelog": "Compatible with BMAD 6.0.4. No script changes needed — core workflows identical to 6.0.3. BMAD 6.0.4 changes: @{project-root} prefix removed, AskUserQuestion critical_action removed from agents, new edge-case-hunter review task added."
     }
   },
-  "latest": "6.0.3"
+  "latest": "6.0.4"
 }
