@@ -186,9 +186,8 @@ for ver, info in sorted(d.get('versions', {}).items()):
   exit 0
 fi
 
-# --- Determine target directory ---
+# --- Find project root ---
 if [ "$GLOBAL" = true ]; then
-  TARGET_DIR="$HOME/.claude/commands"
   PROJECT_ROOT=""
 else
   PROJECT_ROOT=$(find_project_root) || {
@@ -196,17 +195,93 @@ else
     echo "Run from your project root, or use --global to install for all projects."
     exit 1
   }
-  TARGET_DIR="$PROJECT_ROOT/.claude/commands"
 fi
 
-TARGET_PATH="$TARGET_DIR/$SKILL_FILE"
+# --- Determine BMAD version (before target dir — version affects install path) ---
+if [ -n "$FORCE_VERSION" ]; then
+  BMAD_VERSION="$FORCE_VERSION"
+  echo "Using forced version: $BMAD_VERSION"
+elif [ -n "$PROJECT_ROOT" ]; then
+  BMAD_VERSION=$(detect_bmad_version "$PROJECT_ROOT")
+  if [ -n "$BMAD_VERSION" ]; then
+    echo "Detected BMAD version: $BMAD_VERSION"
+  else
+    echo "Warning: Could not detect BMAD version (no manifest.yaml found)."
+    echo "Will use latest available version."
+    BMAD_VERSION=""
+  fi
+else
+  echo "Global install — will use latest available version."
+  BMAD_VERSION=""
+fi
+
+# --- Version comparison helper ---
+# Returns 0 (true) if $1 >= $2 in semver
+version_gte() {
+  local v1="$1" v2="$2"
+  if [ "$v1" = "$v2" ]; then return 0; fi
+  local IFS=.
+  local i v1_parts=($v1) v2_parts=($v2)
+  for ((i=0; i<3; i++)); do
+    local a="${v1_parts[$i]:-0}" b="${v2_parts[$i]:-0}"
+    if [ "$a" -gt "$b" ] 2>/dev/null; then return 0; fi
+    if [ "$a" -lt "$b" ] 2>/dev/null; then return 1; fi
+  done
+  return 0
+}
+
+# --- Determine install architecture (skills vs commands) ---
+# BMAD 6.2+ uses .claude/skills/ with SKILL.md entry points
+# Pre-6.2 uses .claude/commands/ with flat .md files
+USE_SKILLS=false
+if [ -n "$BMAD_VERSION" ] && version_gte "$BMAD_VERSION" "6.2.0"; then
+  USE_SKILLS=true
+fi
+
+# --- Determine target directory ---
+if [ "$USE_SKILLS" = true ]; then
+  if [ "$GLOBAL" = true ]; then
+    TARGET_DIR="$HOME/.claude/skills/${SKILL_NAME}"
+  else
+    TARGET_DIR="$PROJECT_ROOT/.claude/skills/${SKILL_NAME}"
+  fi
+  TARGET_PATH="$TARGET_DIR/SKILL.md"
+  LEGACY_PATH=""
+  if [ -n "$PROJECT_ROOT" ] && [ -f "$PROJECT_ROOT/.claude/commands/$SKILL_FILE" ]; then
+    LEGACY_PATH="$PROJECT_ROOT/.claude/commands/$SKILL_FILE"
+  elif [ "$GLOBAL" = true ] && [ -f "$HOME/.claude/commands/$SKILL_FILE" ]; then
+    LEGACY_PATH="$HOME/.claude/commands/$SKILL_FILE"
+  fi
+else
+  if [ "$GLOBAL" = true ]; then
+    TARGET_DIR="$HOME/.claude/commands"
+  else
+    TARGET_DIR="$PROJECT_ROOT/.claude/commands"
+  fi
+  TARGET_PATH="$TARGET_DIR/$SKILL_FILE"
+  LEGACY_PATH=""
+fi
 
 # --- Uninstall ---
 if [ "$UNINSTALL" = true ]; then
+  removed=false
+  # Remove from current target
   if [ -f "$TARGET_PATH" ]; then
     rm "$TARGET_PATH"
     echo "Removed: $TARGET_PATH"
-  else
+    # Clean up empty skill directory if using skills layout
+    if [ "$USE_SKILLS" = true ] && [ -d "$TARGET_DIR" ] && [ -z "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]; then
+      rmdir "$TARGET_DIR"
+    fi
+    removed=true
+  fi
+  # Also check legacy location
+  if [ -n "$LEGACY_PATH" ] && [ -f "$LEGACY_PATH" ]; then
+    rm "$LEGACY_PATH"
+    echo "Removed legacy: $LEGACY_PATH"
+    removed=true
+  fi
+  if [ "$removed" = false ]; then
     echo "Not installed at: $TARGET_PATH"
   fi
   exit 0
@@ -224,24 +299,6 @@ fi
 
 # --- Create directory ---
 mkdir -p "$TARGET_DIR"
-
-# --- Determine BMAD version ---
-if [ -n "$FORCE_VERSION" ]; then
-  BMAD_VERSION="$FORCE_VERSION"
-  echo "Using forced version: $BMAD_VERSION"
-elif [ -n "$PROJECT_ROOT" ]; then
-  BMAD_VERSION=$(detect_bmad_version "$PROJECT_ROOT")
-  if [ -n "$BMAD_VERSION" ]; then
-    echo "Detected BMAD version: $BMAD_VERSION"
-  else
-    echo "Warning: Could not detect BMAD version (no manifest.yaml found)."
-    echo "Will use latest available version."
-    BMAD_VERSION=""
-  fi
-else
-  echo "Global install — will use latest available version."
-  BMAD_VERSION=""
-fi
 
 # --- Determine source ---
 # Priority: 1) Local versioned folder, 2) Remote versioned folder, 3) Fallback to root
@@ -332,6 +389,11 @@ echo "Installed: $TARGET_PATH"
 if [ -n "${MATCH_VERSION:-}" ]; then
   echo "Version:   $MATCH_VERSION (for BMAD ${BMAD_VERSION:-latest})"
 fi
+if [ "$USE_SKILLS" = true ]; then
+  echo "Format:    .claude/skills/ (BMAD 6.2+)"
+else
+  echo "Format:    .claude/commands/ (pre-6.2)"
+fi
 echo ""
 echo "Usage in Claude Code:"
 echo "  /enhanced-automated-sprint 5              # All stories in Epic 5"
@@ -342,4 +404,13 @@ if [ "$GLOBAL" = true ]; then
   echo "Scope: Global (available in all projects)"
 else
   echo "Scope: Project ($PROJECT_ROOT)"
+fi
+
+# --- Legacy path warning ---
+if [ -n "${LEGACY_PATH:-}" ] && [ -f "$LEGACY_PATH" ]; then
+  echo ""
+  echo "WARNING: Old installation found at: $LEGACY_PATH"
+  echo "  BMAD 6.2+ uses .claude/skills/ instead of .claude/commands/"
+  echo "  The old file may shadow the new installation."
+  echo "  Remove it with: rm \"$LEGACY_PATH\""
 fi

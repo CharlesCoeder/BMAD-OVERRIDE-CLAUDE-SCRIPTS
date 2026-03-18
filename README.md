@@ -10,8 +10,20 @@ Scripts are organized by exact BMAD version. The installer auto-detects your BMA
 |---------|-------------|-----------------------------------------------------------|-------|
 | `6.0.3` | 6.0.3       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Tasks/Subtasks fix |
 | `6.0.4` | 6.0.4       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Same scripts — core workflows unchanged |
+| `6.2.0` | 6.2.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Consolidated review, E2E TDD, `.claude/skills/` |
 
 Root-level files are kept as a fallback for the latest version.
+
+### BMAD 6.2 Architecture Change
+
+BMAD 6.2 replaces `.claude/commands/` with `.claude/skills/` (using `SKILL.md` entry points). The installer auto-detects the architecture and installs to the correct location:
+- **BMAD 6.2+**: `.claude/skills/enhanced-automated-sprint/SKILL.md`
+- **Pre-6.2**: `.claude/commands/enhanced-automated-sprint.md`
+
+Key changes in the 6.2.0 pipeline:
+- **Consolidated review**: `/bmad-bmm-code-review` now runs Blind Hunter + Edge Case Hunter + Acceptance Auditor internally (Steps 7+8+8b collapsed into Step 7)
+- **E2E TDD**: Step 4b generates failing E2E tests in parallel with unit TDD, using `/bmad-qa-generate-e2e-tests`
+- **Story status**: `ready-for-dev` replaces `drafted` (legacy status auto-mapped)
 
 ## Installation
 
