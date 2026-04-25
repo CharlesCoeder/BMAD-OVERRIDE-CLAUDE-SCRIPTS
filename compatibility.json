@@ -23,7 +23,15 @@
         "claude-hotfix-interaction-style.md"
       ],
       "changelog": "Consolidated review (BMAD 6.2 runs adversarial + edge case + acceptance internally). E2E TDD step runs red-phase E2E tests in parallel with unit TDD. Updated for .claude/skills/ architecture."
+    },
+    "6.4.0": {
+      "bmad_version": "6.4.0",
+      "scripts": [
+        "enhanced-automated-sprint.md",
+        "claude-hotfix-interaction-style.md"
+      ],
+      "changelog": "Skill renames /bmad-bmm-* → /bmad-* (6.3.0 agent consolidation: Quinn QA, Bob SM, Barry → Amelia). Pipeline restructured 11 → 9 steps: Step 3 is now a fresh-context Opus runner that executes BMAD's bmad-create-story/checklist.md; Step 4 unit-TDD dropped (Amelia writes Kent-Beck-style unit tests inline in dev-story); Step 10 AC-trace dropped (Acceptance Auditor inside Step 7 covers it). Phase 0 epic-context cache compiled once and reused across Steps 1/5/7. New unattended-by-default behavior (only ambiguous merge conflicts pause), per-story auto-commit at Step 9 with submodule-first sequence (never auto-pushes), codebase anti-leak rules injected into Steps 5/6/8/9 (no BMAD/story-ID references in code or main-repo commits), and a deferred-decisions log artifact for every judgment call. Hotfix port: version label bumped only — Step 0 self-detection logic unchanged for 6.4 surfaces."
     }
   },
-  "latest": "6.2.0"
+  "latest": "6.4.0"
 }

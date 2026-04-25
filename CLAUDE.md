@@ -9,6 +9,7 @@ Override scripts and hotfixes for the [BMAD Method](https://github.com/bmadcode/
 ├── 6.0.3/                          # Scripts for BMAD 6.0.3
 ├── 6.0.4/                          # Scripts for BMAD 6.0.4
 ├── 6.2.0/                          # Scripts for BMAD 6.2.0 (.claude/skills/ architecture)
+├── 6.4.0/                          # Scripts for BMAD 6.4.0 (skill renames, 9-step pipeline, unattended defaults)
 ├── compatibility.json              # Version registry (maps BMAD versions to scripts)
 ├── install-enhanced-sprint.sh      # Version-aware installer (local + remote)
 ├── enhanced-automated-sprint.md    # Root-level fallback (latest version)
@@ -26,7 +27,7 @@ Each version folder contains the same two scripts tailored to that BMAD release:
 
 - **Version-aware installation**: The installer reads `_bmad/_config/manifest.yaml` from the target project to auto-detect the BMAD version, then pulls the matching scripts from the correct version folder.
 - **Fallback chain**: Exact version match > closest lower version > `latest` from `compatibility.json` > root-level files.
-- **Enhanced Automated Sprint**: A Claude Code skill (`/enhanced-automated-sprint`) that automates the full dev lifecycle: story creation, refinement, validation, TDD tests (unit + optional E2E), implementation, consolidated code review (BMAD 6.2 runs adversarial, edge case, and acceptance reviews internally), fixes, traceability, and sprint status updates.
+- **Enhanced Automated Sprint**: A Claude Code skill (`/enhanced-automated-sprint`) that automates the full dev lifecycle: story creation, refinement, validation, TDD tests (unit + optional E2E), implementation, consolidated code review (BMAD 6.2 runs adversarial, edge case, and acceptance reviews internally), fixes, traceability, and sprint status updates. **6.4.0 introduces unattended-by-default execution with anti-leak commit messages, per-story auto-commit (incl. submodule commits), and a deferred-decisions log artifact** — every former pause point auto-resolves with best-judgment and writes to `{implementation_artifacts}/sprint-epic-${EPIC_ID}-deferred-decisions.md`; ambiguous merge conflicts are the only hard pause.
 
 ## Adding a New BMAD Version
 
