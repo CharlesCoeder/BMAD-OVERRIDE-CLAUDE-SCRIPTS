@@ -43,7 +43,7 @@ New defaults baked into 6.4.0 (no opt-out, this fork is personal):
 > |------|-------------|--------------|-------|-----------|
 > | 1 | Create story from epic | `/bmad-create-story` | Opus | Yes |
 > | 2 | Refine story via elicitation | _(auto-apply methods)_ | Opus | Yes |
-> | 3 | Validate story (fresh-context BMAD checklist runner) | _(executes `bmad-create-story/checklist.md`)_ | Opus | Yes |
+> | 3 | Validate story (fresh-context BMAD checklist runner) | _(executes `bmad-create-story/checklist.md`)_ | Sonnet | Yes |
 > | 4 | Write TDD E2E tests (red phase) | `/bmad-qa-generate-e2e-tests` | Sonnet | Yes |
 > | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Sonnet | Yes (worktree) |
 > | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | No (sequential) |
@@ -473,7 +473,7 @@ Task tool:
 Task tool:
   description: "[${SID}] Validate (BMAD checklist runner)"
   subagent_type: general-purpose
-  model: opus
+  model: sonnet
   prompt: |
     ${BMAD_ENV_BLOCK}
 
@@ -795,6 +795,9 @@ verification passes and BEFORE worktree cleanup.
      - Read: git diff --staged
      - Apply ${ANTI_LEAK_BLOCK} rules verbatim — NO story ID, NO "BMAD", NO AC numbers,
        NO epic references.
+     - **Do NOT mention the docs submodule** (or any submodule pointer bump) in the
+       main-repo commit message. The submodule pointer is staging-level mechanics, not
+       a user-facing change. The message describes ONLY the code/feature change.
      - Produce a conventional-commits format message describing the user-facing or
        technical purpose of the change.
    - Run: git commit -m "${main_message}"
@@ -901,7 +904,7 @@ All decision points run unattended by default; outcomes that previously paused f
 
 2. **Step 1 (create-story) post-create review:** No pause. Story flows straight to Step 2. Step 3 (BMAD-checklist validate) is the new quality gate after Step 1 — that runs unattended in fresh context and logs findings.
 
-3. **Step 3 (validate) FAIL handling:** Auto-correct + log + block-on-second-fail. On first FAIL, spawn one corrective sub-agent (Opus, `subagent_type: general-purpose`) that reads the FAIL findings + the story file + the epic file, applies fixes for Critical-tier findings to the story file, and re-runs the BMAD checklist. If the second run still FAILs: mark the story `blocked`, append a `confidence: low, needs_human_review: yes` entry to `${DEFERRED_DECISIONS_PATH}`, and continue with other stories in the sprint. (Never an infinite retry loop — exactly one auto-correction pass.)
+3. **Step 3 (validate) FAIL handling:** Auto-correct + log + block-on-second-fail. On first FAIL, spawn one corrective sub-agent (Sonnet, `subagent_type: general-purpose`) that reads the FAIL findings + the story file + the epic file, applies fixes for Critical-tier findings to the story file, and re-runs the BMAD checklist. If the second run still FAILs: mark the story `blocked`, append a `confidence: low, needs_human_review: yes` entry to `${DEFERRED_DECISIONS_PATH}`, and continue with other stories in the sprint. (Never an infinite retry loop — exactly one auto-correction pass.)
 
 4. **Step 7 (consolidated review) action items:** Auto-route by severity. Critical and High → straight to Step 8 for fix. Medium and Low → append to `${DEFERRED_DECISIONS_PATH}` with `needs_human_review: yes` and skip the fix. If only Medium/Low items exist (no Critical or High): mark Steps 8 AND 9 completed immediately and proceed to Step 10. (The user-presentation block from older versions is gone.)
 
@@ -983,7 +986,7 @@ After ALL stories complete (or fail):
 | Phase 0: Discovery | coordinator | — | Reads YAML/MD, creates tasks, compiles epic-context cache, initializes deferred-decisions log — no agent needed (epic-context compile spawns one sub-agent only on cache miss) |
 | Step 1: Create story | opus | — | Story authoring needs deep epic context understanding |
 | Step 2: Elicitation | opus | — | Method selection requires nuanced judgment |
-| Step 3: Validate (BMAD checklist runner) | opus | — | Fresh-context independent re-analysis using BMAD's authoritative checklist; auto-fix Critical, log Enhancement/Optimization |
+| Step 3: Validate (BMAD checklist runner) | sonnet | — | Mechanical 8-step checklist execution against the story spec; sonnet is the second opinion (different model from Step 1 opus = real diversity), and checklist work doesn't need opus reasoning |
 | Step 4: TDD E2E | sonnet | — | E2E test generation from ACs, speed matters |
 | Step 5: Implementation | sonnet | **worktree** | Longest step, worktree enables parallel execution across stories; Amelia writes Kent-Beck-style unit tests inline |
 | Step 6: Merge impl | **opus** | — | **BMAD Dev Agent (Amelia)** — senior engineer merge judgment, conflict resolution, post-merge verification (NO auto-commit) |
