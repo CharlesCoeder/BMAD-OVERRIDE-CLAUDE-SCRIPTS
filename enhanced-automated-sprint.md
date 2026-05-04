@@ -9,6 +9,19 @@ description: 'Run the full BMAD pipeline (BMAD 6.6-targeted) for multiple storie
 - Skill paths verified unchanged between v6.4.0 and v6.6.0: /bmad-create-story, /bmad-dev-story, /bmad-code-review, /bmad-qa-generate-e2e-tests, /bmad-sprint-status, /bmad-correct-course; bmad-create-story/checklist.md, bmad-quick-dev/compile-epic-context.md, bmad-advanced-elicitation/methods.csv.
 -->
 
+<!-- 6.6.0 in-version revision: tier-adaptive pipeline (do not delete)
+- Added Step 1.5 (Sonnet classifier) between Step 1 and Step 2. Per-story tier in {lite, standard, full} decides which downstream steps run.
+  - lite: skips Steps 2, 3, 4 (elicitation, validation, E2E TDD)
+  - standard: skips Step 2 only (default for most stories)
+  - full: runs all steps (legacy behavior)
+- Always-on steps regardless of tier: 1, 1.5, 5, 6, 7, 8, 9, 10. Step 7 already consolidates Edge Case Hunter + Acceptance Auditor internally per BMAD 6.4 (see audit table above).
+- New input syntax: STORY_ID:tier suffix (e.g. 7-1:lite) and global --tier=lite|standard|full flag. Resolution order: --tier= > :suffix > auto-classifier.
+- Skipped tasks are STILL created in the task graph and marked completed immediately via TaskUpdate (same mechanism as existing --skip-elicitation), preserving the dependency chain.
+- Classifier runs even when overridden — its recommendation is logged to ${DEFERRED_DECISIONS_PATH} for post-sprint visibility.
+- Rationale: smaller-scope stories were burning context on validation/elicitation/E2E that didn't pay off. Auto-classification + override flags let the user keep "always run the full pipeline" behavior with --tier=full.
+- Rubric refinement (post-initial): AC count dropped as a tier trigger (BMAD stories naturally have 15-20 ACs even when scope is narrow). Replaced with implementation-file-count from the story File List as the real complexity signal. Migration risk marker split: additive migrations (CREATE TABLE/INDEX, new RLS, additive ALTER) → standard; destructive migrations (DROP, type narrowing, NOT NULL on existing column, data-overwriting backfill) → full. Validated against river-journal stories 2-1 and 2-2: 2-1 (additive migration + 9 files) → standard, 2-2 (single-file pure function + 18 ACs) → standard. Both correctly avoid full-tier over-classification.
+-->
+
 <!-- BMAD 6.2.0 → 6.4.0 skill-reference audit (do not delete; future upgrades use this as a baseline)
 
 | Step | 6.2.0 invocation | 6.4 status | 6.4 invocation / replacement |
@@ -35,22 +48,23 @@ New defaults baked into 6.4.0 (no opt-out, this fork is personal):
 
 # Enhanced Automated Sprint Pipeline
 
-> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create -> refine -> validate (fresh-context BMAD checklist) -> write E2E tests -> implement -> consolidated code review -> fix issues -> merge fixes (auto-commit) -> update sprint status**. BMAD 6.4's `/bmad-code-review` runs Blind Hunter, Edge Case Hunter, and Acceptance Auditor internally — no separate adversarial/edge-case steps needed. Stories can run in parallel when independent. **Unattended by default**: every former pause point auto-resolves with best-judgment and logs to a deferred-decisions doc; the only hard pause is ambiguous merge conflicts.
+> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create -> classify tier -> (refine) -> (validate) -> (write E2E tests) -> implement -> consolidated code review -> fix issues -> merge fixes (auto-commit) -> update sprint status**. After Step 1 a Sonnet classifier picks a tier (`lite` / `standard` / `full`) per story; smaller-scope stories skip elicitation/validation/E2E to save context. BMAD 6.4's `/bmad-code-review` runs Blind Hunter, Edge Case Hunter, and Acceptance Auditor internally — no separate adversarial/edge-case steps needed. Stories can run in parallel when independent. **Unattended by default**: every former pause point auto-resolves with best-judgment and logs to a deferred-decisions doc; the only hard pause is ambiguous merge conflicts.
 >
-> **Usage:** `/enhanced-automated-sprint 7` or `/enhanced-automated-sprint 7 7-1 7-2 --parallel 2`
+> **Usage:** `/enhanced-automated-sprint 7` or `/enhanced-automated-sprint 7 7-1:lite 7-2:full --parallel 2`
 >
-> | Step | What It Does | BMAD Command | Model | Parallel? |
-> |------|-------------|--------------|-------|-----------|
-> | 1 | Create story from epic | `/bmad-create-story` | Opus | Yes |
-> | 2 | Refine story via elicitation | _(auto-apply methods)_ | Opus | Yes |
-> | 3 | Validate story (fresh-context BMAD checklist runner) | _(executes `bmad-create-story/checklist.md`)_ | Sonnet | Yes |
-> | 4 | Write TDD E2E tests (red phase) | `/bmad-qa-generate-e2e-tests` | Sonnet | Yes |
-> | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Sonnet | Yes (worktree) |
-> | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | No (sequential) |
-> | 7 | Consolidated code review | `/bmad-code-review` | Opus | Yes |
-> | 8 | Fix review action items | _(targeted fixes)_ | Sonnet | Yes (worktree) |
-> | 9 | Merge fix branch + auto-commit (incl. submodules) | _(Amelia dev agent)_ | Opus | No (sequential) |
-> | 10 | Update sprint status | `/bmad-sprint-status` | Coordinator | No (sequential) |
+> | Step | What It Does | BMAD Command | Model | Tiers | Parallel? |
+> |------|-------------|--------------|-------|-------|-----------|
+> | 1 | Create story from epic | `/bmad-create-story` | Opus | all | Yes |
+> | 1.5 | Classify story tier (lite/standard/full) | _(rubric over story file)_ | Sonnet | all | Yes |
+> | 2 | Refine story via elicitation | _(auto-apply methods)_ | Opus | full | Yes |
+> | 3 | Validate story (fresh-context BMAD checklist runner) | _(executes `bmad-create-story/checklist.md`)_ | Sonnet | standard, full | Yes |
+> | 4 | Write TDD E2E tests (red phase) | `/bmad-qa-generate-e2e-tests` | Sonnet | standard, full | Yes |
+> | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Sonnet | all | Yes (worktree) |
+> | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | all | No (sequential) |
+> | 7 | Consolidated code review | `/bmad-code-review` | Opus | all | Yes |
+> | 8 | Fix review action items | _(targeted fixes)_ | Sonnet | all | Yes (worktree) |
+> | 9 | Merge fix branch + auto-commit (incl. submodules) | _(Amelia dev agent)_ | Opus | all | No (sequential) |
+> | 10 | Update sprint status | `/bmad-sprint-status` | Coordinator | all | No (sequential) |
 
 Run the full BMAD pipeline for **multiple stories** in an epic using task-based tracking and focused agents.
 
@@ -194,22 +208,36 @@ This block is included in agent prompts that have decision-point logic (Phase 0 
 ## Input Format
 
 ```
-$ARGUMENTS = <EPIC_ID> [STORY_IDS...] [--parallel N] [--skip-elicitation] [--auto-fix]
+$ARGUMENTS = <EPIC_ID> [STORY_IDS_WITH_OPTIONAL_TIER...] [--parallel N] [--tier=lite|standard|full] [--skip-elicitation] [--auto-fix]
 ```
 
-**Examples:**
-- `/enhanced-automated-sprint 5` — All `ready-for-dev` + `backlog` stories in Epic 5
-- `/enhanced-automated-sprint 5 5-1 5-2` — Only stories 5-1 and 5-2
-- `/enhanced-automated-sprint 5 --parallel 2` — Epic 5, run up to 2 stories in parallel
-- `/enhanced-automated-sprint 5 5-1 --skip-elicitation` — Skip Step 2 for speed
+A story ID may carry an explicit tier suffix using a colon: `STORY_ID:lite`, `STORY_ID:standard`, `STORY_ID:full`. A bare `STORY_ID` (no suffix) is auto-classified by the Step 1.5 classifier. The optional `--tier=` flag forces the SAME tier for every story in this run (overrides both auto-classification and any per-story suffixes; logged once to the deferred-decisions doc).
 
-**Defaults:** `--parallel 1` (sequential), elicitation ON. Unattended mode and auto-fix-Critical-and-High are now ALWAYS ON (see Decision Points below).
+**Examples:**
+- `/enhanced-automated-sprint 5` — All `ready-for-dev` + `backlog` stories in Epic 5; each auto-classified after Step 1
+- `/enhanced-automated-sprint 5 5-1 5-2` — Only stories 5-1 and 5-2; both auto-classified
+- `/enhanced-automated-sprint 5 --parallel 2` — Epic 5, run up to 2 stories in parallel; each auto-classified
+- `/enhanced-automated-sprint 5 5-1:lite 5-2:full` — Force 5-1 to lite tier, 5-2 to full tier; classifier still runs but is overridden (its recommendation is still logged for visibility)
+- `/enhanced-automated-sprint 5 --tier=full` — Force every story in Epic 5 to full tier (legacy "always run the full pipeline" behavior)
+- `/enhanced-automated-sprint 5 5-1 --skip-elicitation` — Auto-classify, but unconditionally skip Step 2 even if classifier picks `full` (legacy flag, retained)
+
+**Defaults:** `--parallel 1` (sequential), tier auto-classified per story. Unattended mode and auto-fix-Critical-and-High are now ALWAYS ON (see Decision Points below).
+
+**Tier definitions:**
+
+| Tier | Steps run | Steps skipped | Intended for |
+|------|-----------|---------------|--------------|
+| `lite` | 1, 1.5, 5, 6, 7, 8, 9, 10 | 2, 3, 4 | Trivial scope: ≤2 total impl files, single module, no new deps, no risk markers, no migrations of any kind, BMAD size XS/S |
+| `standard` | 1, 1.5, 3, 4, 5, 6, 7, 8, 9, 10 | 2 | Default for most stories. Includes additive migrations (CREATE TABLE/INDEX, new RLS), threading additive changes through many existing files (mods don't trigger full), pure-function stories regardless of AC count |
+| `full` | 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10 | none | High-risk: auth/payments/PII/security markers, destructive migrations (DROP/ALTER-DROP/type-narrow/data-overwrite), >3 NEW files (new subsystem signal), new top-level module, new external deps, or BMAD size L/XL |
+
+Skipped steps are still created in the task graph and marked `completed` immediately at creation time (same mechanism as `--skip-elicitation`, see Per-Story Tasks below). This keeps the dependency chain intact regardless of tier.
 
 > **DEPRECATED:** `--auto-fix` is now the default and has no effect. The flag is accepted as a no-op for backward compatibility with saved invocations, but documented as deprecated. Auto-fix-Critical-and-High behavior is on for every run.
 
 **Story status mapping:** BMAD 6.4 uses `ready-for-dev` as the primary status. The legacy `drafted` status is auto-mapped to `ready-for-dev` for backward compatibility. The coordinator accepts both.
 
-**E2E tests:** Step 4 (E2E TDD) is the sole TDD step. It is blocked by Step 3 (validation) and feeds Step 5 (implementation). Unit tests are written by Amelia inside Step 5 in Kent-Beck-style red-green-refactor — BMAD 6.3+ deliberately removed the standalone unit-TDD skill when Quinn QA was consolidated into Amelia.
+**E2E tests:** Step 4 (E2E TDD) is the sole TDD step. It is blocked by Step 3 (validation) and feeds Step 5 (implementation). Unit tests are written by Amelia inside Step 5 in Kent-Beck-style red-green-refactor — BMAD 6.3+ deliberately removed the standalone unit-TDD skill when Quinn QA was consolidated into Amelia. **Tier interaction:** Step 4 only runs for `standard` and `full` tiers. For `lite`, Step 4 is auto-completed at Step 1.5 — Amelia still writes inline unit tests during Step 5, but no separate E2E red-phase exists. This is intentional: lite-tier stories are explicitly scoped to changes where E2E TDD is overkill.
 
 **Optimization:** Worktree isolation is decided at spawn time based on **actual concurrency**, not just the `--parallel` flag:
 - If `--parallel 1`: Steps 5/8 run directly on the working branch WITHOUT worktree isolation (no merge steps 6/9 needed).
@@ -227,7 +255,7 @@ Before ANY pipeline work begins, the coordinator MUST:
 4. **Detect skill architecture** — check if `.claude/skills/` directory exists. If yes, set `${SKILL_ARCH}` to `skills`. If only `.claude/commands/` exists, set to `commands`. Store for agent spawn templates (affects skill invocation paths). Probe skill availability by spawning a lightweight agent that attempts `/bmad-help` — if it fails, switch all templates to inline-workflow mode (load workflow YAML directly instead of invoking `/bmad-*` skills).
 5. **Resolve `${ANTI_LEAK_BLOCK}`** — copy the static text from the "Codebase Anti-Leak Block (HARD CONSTRAINT)" section above into a single string. No variables to substitute. Store for injection into Steps 5, 6, 8, 9 prompts.
 6. **Build `${BMAD_ENV_BLOCK}`** — expand the Agent Environment Block template with all resolved values (including `${EPIC_CONTEXT_PATH}` and `${DEFERRED_DECISIONS_PATH}` once resolved in steps 9–10 below). This block is injected into every agent prompt for the rest of the pipeline.
-7. **Parse `$ARGUMENTS`** — extract EPIC_ID, optional STORY_IDS, and flags. (`--auto-fix` is a no-op; record but ignore.)
+7. **Parse `$ARGUMENTS`** — extract EPIC_ID, optional STORY_IDS (each potentially carrying a `:lite|:standard|:full` tier suffix — strip and store as `${TIER_HINT[SID]}`), and flags. (`--auto-fix` is a no-op; record but ignore.) If `--tier=` is set, store as `${GLOBAL_TIER}` — this forces every story to that tier and overrides any per-story `:tier` suffix. Validate: tier values must be one of `lite|standard|full`; reject the run with a clear error otherwise.
 8. **Read sprint-status.yaml** at `{implementation_artifacts}/sprint-status.yaml`
 9. **Compile or reuse epic context.**
    1. Look for cached file: `{implementation_artifacts}/epic-${EPIC_ID}-context.md`. Validity criteria: file exists, non-empty, starts with `# Epic ${EPIC_ID} Context:`, AND no file in `{planning_artifacts}` is newer (`mtime` comparison).
@@ -252,6 +280,81 @@ Before ANY pipeline work begins, the coordinator MUST:
 16. **Log the plan and proceed (no approval pause).** Print the plan to stdout for transcript visibility, then append a "Sprint plan committed" entry to `${DEFERRED_DECISIONS_PATH}` with `confidence: high, needs_human_review: no`. Proceed directly into the wave-loop without waiting for user input.
 </rules>
 
+## Story Tier Classification (Step 1.5)
+
+<rules CRITICAL="TRUE">
+Tier classification runs **per story, immediately after Step 1 (Create Story) completes**, and **before Step 2 is unblocked**. The classifier reads the just-created story file plus `${EPIC_CONTEXT_PATH}` and emits one of `lite | standard | full`. The result determines which downstream tasks are auto-completed at creation time (see Per-Story Tasks below).
+
+### Resolution order (highest priority first)
+
+1. `${GLOBAL_TIER}` (from `--tier=` flag) — forces tier for every story in the run.
+2. `${TIER_HINT[SID]}` (from `STORY_ID:tier` suffix) — forces tier for this specific story.
+3. **Auto-classification** — Sonnet classifier output.
+
+The classifier ALWAYS runs even when 1 or 2 apply, because its recommendation is still logged to `${DEFERRED_DECISIONS_PATH}` for visibility (so the user can see whether the override agreed with the rubric).
+
+### Classifier agent spec
+
+```
+Task tool:
+  description: "[${SID}] Classify story tier"
+  subagent_type: general-purpose
+  model: sonnet
+  prompt: |
+    ${BMAD_ENV_BLOCK}
+
+    You are classifying story ${SID} into a pipeline tier. Read ONLY:
+    - The story file at {planning_artifacts}/stories/${SID}.md (or wherever bmad-create-story wrote it; check ${EPIC_CONTEXT_PATH} for path conventions)
+    - ${EPIC_CONTEXT_PATH}
+
+    Apply the rubric below and emit a single JSON object on the FINAL line of your response. No prose after the JSON.
+
+    Rubric (assign tier by FIRST matching row, top to bottom):
+
+    | Tier | Trigger conditions (any one is sufficient) |
+    |------|--------------------------------------------|
+    | full | High-risk markers in story title/ACs/tasks: auth, authn/authz, password, token, session, payment, billing, money, PCI, PII, GDPR, public API, breaking change, security, crypto, RBAC. OR: **destructive migration** (DROP TABLE/COLUMN/INDEX, ALTER...DROP, type narrowing, adding NOT NULL to existing column, RENAME, data backfill that overwrites). OR: **>3 NEW implementation files** (signals a new subsystem or significant new surface area; modifying many existing files does NOT trigger this — threading an additive change through an established system stays at standard). OR: introduces a new top-level module/package. OR: adds a new external dependency (npm/pip/go/cargo/etc.). OR: BMAD size estimate is L or XL. |
+    | lite | All of: ≤2 total implementation files in the File List (created + modified, excluding tests/docs) AND single module/package scope AND no new deps AND no risk markers (high-risk OR migration of any kind) AND BMAD size estimate is XS or S AND story type is one of {bug-fix, copy-tweak, config-change, refactor-localized, doc-only, dependency-bump-patch}. |
+    | standard | Everything else (the safe default — preserves validation + E2E TDD, drops only advanced elicitation). Includes: **additive migrations** (CREATE TABLE, CREATE INDEX, additive ALTER, new RLS policies on new tables), single-feature implementations across 3-6 files, well-specified pure-function stories regardless of AC count. |
+
+    **Note on AC count:** AC count is NOT a tier trigger. BMAD stories often have 15-20 ACs even when scope is narrow because the methodology encourages exhaustive criteria. Use file-list size and risk markers as the real complexity signal, not AC count.
+
+    **Note on additive vs destructive migrations:** A migration that only adds new tables/columns/indexes with no data movement on existing rows is `standard`. A migration that mutates existing data, drops anything, or narrows types is `full` — the rollback surface is fundamentally different.
+
+    Emit EXACTLY this JSON shape:
+    {"tier": "lite|standard|full", "confidence": "high|medium|low", "reasoning": "<one sentence citing the rubric row>", "signals": {"ac_count": <int>, "risk_markers": [<strings>], "migration_kind": "none|additive|destructive", "new_file_count_estimate": <int>, "modified_file_count_estimate": <int>, "new_deps": <bool>, "size": "<XS|S|M|L|XL|unknown>"}}
+
+    Confidence guide:
+    - high: rubric trigger is unambiguous (e.g. story title says "add OAuth login" → full)
+    - medium: borderline (e.g. 4 ACs, no risk markers — could be standard or full)
+    - low: story file is sparse, signals unclear; default to standard and flag medium-low confidence
+
+    Do NOT speculate beyond the story file and epic context. Do NOT read source code.
+```
+
+### Coordinator handling of classifier output
+
+After the classifier returns:
+
+1. Resolve `${TIER[SID]}` per the resolution order above.
+2. Append an entry to `${DEFERRED_DECISIONS_PATH}` with: chosen tier, source (`global-flag | per-story-suffix | auto`), classifier recommendation, classifier confidence, classifier reasoning. If the chosen tier disagrees with the classifier recommendation, mark `confidence: medium, needs_human_review: yes` (override is honored, but flagged for post-sprint review).
+3. If classifier confidence is `low` AND there is no override: choose `standard` (safe default), log `confidence: low, needs_human_review: yes`.
+4. **Auto-complete skipped tasks immediately** — using TaskUpdate, mark the appropriate per-story tasks as `completed`:
+   - tier = `lite`: complete Steps 2, 3, 4 (in addition to any tasks the classifier just unblocked)
+   - tier = `standard`: complete Step 2 only
+   - tier = `full`: complete nothing extra
+
+This auto-completion uses the exact same mechanism as `--skip-elicitation` (see Per-Story Tasks Note below) — the dependency chain stays intact because Step 5 still blocks on Step 4, which is now `completed` with no work performed.
+
+### Failure handling
+
+If the classifier agent fails or returns malformed JSON: log `confidence: low, needs_human_review: yes` to `${DEFERRED_DECISIONS_PATH}`, default to tier `standard`, and proceed. Do NOT retry the classifier — it is a sub-second decision and a retry rarely helps; the safe default keeps the sprint moving.
+
+### Concurrency
+
+Step 1.5 is **PARALLEL** across stories — the classifier is read-only and story-scoped. It runs in the same wave as other unblocked Step 1.5 tasks. See the wave-based execution loop below; Step 1.5 sits between Step 1 and Step 2 in the dependency graph.
+</rules>
+
 ## Task Structure
 
 For each story, create tasks using TaskCreate, then set dependencies via TaskUpdate (`addBlockedBy`). The coordinator creates ALL tasks upfront, then wires up `blockedBy` relationships, then works through them respecting dependencies.
@@ -269,7 +372,8 @@ For story `${SID}`:
 | Task Subject | ActiveForm | Blocked By |
 |---|---|---|
 | `[${SID}] Step 1: Create story` | `Creating story ${SID}` | — * |
-| `[${SID}] Step 2: Advanced elicitation` | `Running elicitation on ${SID}` | `[${SID}] Step 1: Create story` |
+| `[${SID}] Step 1.5: Classify tier` | `Classifying tier for ${SID}` | `[${SID}] Step 1: Create story` |
+| `[${SID}] Step 2: Advanced elicitation` | `Running elicitation on ${SID}` | `[${SID}] Step 1.5: Classify tier` |
 | `[${SID}] Step 3: Validate story` | `Validating story ${SID}` | `[${SID}] Step 2: Advanced elicitation` |
 | `[${SID}] Step 4: TDD E2E test generation` | `Generating TDD E2E tests for ${SID}` | `[${SID}] Step 3: Validate story` |
 | `[${SID}] Step 5: Implementation` | `Implementing story ${SID}` | `[${SID}] Step 4: TDD E2E test generation` |
@@ -281,7 +385,13 @@ For story `${SID}`:
 
 **\*** Coordinator sets Step 1 `blockedBy` dynamically: no blocker in parallel mode, previous story's Step 10 in sequential mode (`--parallel 1`), or inter-story dependency's Step 10 if epic defines one.
 
-If `--skip-elicitation`: ALWAYS create Step 2 in the task graph (keeps the dependency chain intact), but mark it as `completed` immediately at creation time. This avoids conditional task graph construction — Step 3 still blocks on Step 2, which is already done.
+**Per-Story Tasks Note (skip mechanism):** The task graph above is created in full for EVERY story regardless of tier or `--skip-elicitation`. After Step 1.5 classifies the story (or if `--skip-elicitation` is set), the coordinator marks the appropriate skipped tasks as `completed` IMMEDIATELY via TaskUpdate without spawning an agent. This avoids conditional task-graph construction — downstream tasks still block on their predecessors, but those predecessors are already done.
+
+Skip rules (applied additively):
+- tier = `lite` → Steps 2, 3, 4 marked `completed` immediately after Step 1.5
+- tier = `standard` → Step 2 marked `completed` immediately after Step 1.5
+- tier = `full` → no extra completions
+- `--skip-elicitation` flag (legacy) → Step 2 marked `completed` regardless of tier (same effect on lite/standard, no-op on full)
 
 ### Cross-Story Dependencies
 
@@ -313,7 +423,7 @@ The coordinator runs a **wave-based execution loop**. Each iteration:
 1. **Call TaskList** — get all tasks and their statuses
 2. **Identify ALL unblocked tasks** — tasks where every `blockedBy` dependency is `completed`
 3. **Group unblocked tasks by concurrency rules:**
-   - Steps 1, 2, 3 (story creation/elicitation/validation): **PARALLEL** — no shared files
+   - Steps 1, 1.5, 2, 3 (story creation / tier classification / elicitation / validation): **PARALLEL** — no shared files. Step 1.5 is read-only Sonnet classification.
    - Step 4 (TDD E2E): **PARALLEL** — safe because E2E test files are story-scoped. Each agent writes only to its own story's E2E test files. If stories share a test file, fall back to SEQUENTIAL for Step 4.
    - Step 5 (implementation): **PARALLEL in worktrees** — `isolation: "worktree"` gives each agent its own repo copy
    - Steps 6, 9 (merges): **SEQUENTIAL** — merge one worktree branch at a time to avoid race conditions; Step 9 also performs auto-commit
@@ -326,24 +436,28 @@ The coordinator runs a **wave-based execution loop**. Each iteration:
 
 ### Parallelism Example
 
-Given stories A-1 and A-2 with `--parallel 2` and no inter-story dependencies:
+Given stories A-1 (classified `full`) and A-2 (classified `lite`) with `--parallel 2` and no inter-story dependencies:
 
 ```
-Wave 1:  [A-1] Step 1 + [A-2] Step 1         parallel (story creation)
-Wave 2:  [A-1] Step 2 + [A-2] Step 2         parallel (elicitation)
-Wave 3:  [A-1] Step 3 + [A-2] Step 3         parallel (validation)
-Wave 4:  [A-1] Step 4 + [A-2] Step 4         parallel (E2E TDD)
-Wave 5:  [A-1] Step 5 + [A-2] Step 5         parallel IN WORKTREES
-Wave 6:  [A-1] Step 6                         SEQUENTIAL merge
-Wave 7:  [A-2] Step 6                         SEQUENTIAL merge
-Wave 8:  [A-1] Step 7 + [A-2] Step 7         parallel (consolidated review)
-Wave 9:  [A-1] Step 8 + [A-2] Step 8         parallel IN WORKTREES (fixes)
-Wave 10: [A-1] Step 9                         SEQUENTIAL merge + auto-commit
-Wave 11: [A-2] Step 9                         SEQUENTIAL merge + auto-commit
-Wave 12: [A-1] Step 10, then [A-2] Step 10   COORDINATOR-SEQUENTIAL
+Wave 1:  [A-1] Step 1   + [A-2] Step 1               parallel (story creation)
+Wave 2:  [A-1] Step 1.5 + [A-2] Step 1.5             parallel (tier classification)
+                                                      → A-2 Steps 2, 3, 4 marked completed (lite tier)
+Wave 3:  [A-1] Step 2                                 parallel (A-2 has no work this wave)
+Wave 4:  [A-1] Step 3                                 parallel (A-2 still skipping)
+Wave 5:  [A-1] Step 4   + [A-2] Step 5 (worktree)    A-2 races ahead — it's already at implement
+Wave 6:  [A-1] Step 5 (worktree)                     A-1 catches up
+Wave 7:  [A-2] Step 6                                 SEQUENTIAL merge
+Wave 8:  [A-1] Step 6                                 SEQUENTIAL merge
+Wave 9:  [A-1] Step 7 + [A-2] Step 7                 parallel (consolidated review)
+Wave 10: [A-1] Step 8 + [A-2] Step 8 (worktrees)     parallel (fixes)
+Wave 11: [A-1] Step 9                                 SEQUENTIAL merge + auto-commit
+Wave 12: [A-2] Step 9                                 SEQUENTIAL merge + auto-commit
+Wave 13: [A-1] Step 10, then [A-2] Step 10           COORDINATOR-SEQUENTIAL
 ```
 
-**Speedup:** 12 waves vs ~18+ sequential steps. BMAD 6.4's consolidated review (Blind Hunter + Edge Case Hunter + Acceptance Auditor in a single invocation) replaces the 3 separate review agents from prior versions, reducing review from 3 parallel agents to 1 without losing coverage. Implementation (the longest step) runs concurrently across stories.
+**Tier-aware throughput:** Lite stories burn through 2/3/4 instantly (TaskUpdate-only, no agent spawn) and reach Step 5 in the same wave a `full` peer is still on Step 4. The `--parallel N` cap on concurrent worktrees is still respected — lite stories just fill the wave faster. If all stories in a run are `lite`, the wave count collapses dramatically (no Steps 2/3/4 agents at all).
+
+**Speedup:** Original full-tier baseline was 12 waves vs ~18+ sequential steps. BMAD 6.4's consolidated review (Blind Hunter + Edge Case Hunter + Acceptance Auditor in a single invocation) replaces the 3 separate review agents from prior versions. Implementation (the longest step) runs concurrently across stories. Lite-tier stories save 3 sequential agent spawns per story (elicitation + validation + E2E TDD) and the context they would have consumed.
 
 ### How to Spawn Parallel Agents
 
