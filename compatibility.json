@@ -39,7 +39,15 @@
         "claude-hotfix-interaction-style.md"
       ],
       "changelog": "Config-source patch for BMAD 6.6 (#2348): `project_name` moved from `_bmad/bmm/config.yaml` to `_bmad/core/config.yaml`. Phase 0 step 1 and the Configuration table now reflect the two-file split (core vs bmm) and prefer the core copy when both exist (matches installer auto-migration precedence). 6.5.0 brought no script-affecting changes (agent-platform additions only); skill paths and command names verified unchanged from 6.4.0. Hotfix unchanged."
+    },
+    "6.8.0": {
+      "bmad_version": "6.8.0",
+      "scripts": [
+        "enhanced-automated-sprint.md",
+        "claude-hotfix-interaction-style.md"
+      ],
+      "changelog": "BMAD 6.8 support. Skill/command names verified UNCHANGED 6.6→6.8 (/bmad-create-story, /bmad-dev-story, /bmad-code-review, /bmad-qa-generate-e2e-tests, /bmad-sprint-status, /bmad-correct-course) and story-status vocabulary unchanged — no document conversion required for the pipeline's inputs (stories/epics/sprint-status/PRD all forward-compatible). 6.8 breaking changes (bmad-create-ux-design → bmad-ux two-spine DESIGN.md+EXPERIENCE.md; bmad-distillator → bmad-spec) are planning surfaces the sprint does not consume. PATH FIX: support-file reads (methods.csv, create-story checklist.md, compile-epic-context.md) now resolve through a Phase-0-detected ${BMAD_SKILLS_ROOT} (canonical .claude/skills/<skill>/, with legacy _bmad/ fallback cascade) — the old _bmad/bmm/skills/ and _bmad/core/workflows/ paths were stale since the 6.2 .claude/skills move. NEW baseline_commit handling (#2403): dev-story stamps baseline_commit into story frontmatter and code-review uses it as the diff base; Step 7 now constrains review scope to the story File List to prevent cross-story over-scoping from sibling worktree merges, and notes that yolo + baseline_commit keep code-review unattended (no branch-confirm HALT). Added project_context (#2422) to the env block (optional, skills self-resolve). .decision-log.md (6.7) confirmed planning-only — no coexistence concern. Hotfix: version label bumped to 6.8.0 only."
     }
   },
-  "latest": "6.6.0"
+  "latest": "6.8.0"
 }

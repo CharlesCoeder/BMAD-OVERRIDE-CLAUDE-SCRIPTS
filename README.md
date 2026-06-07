@@ -12,10 +12,12 @@ Scripts are organized by exact BMAD version. The installer auto-detects your BMA
 | `6.0.4` | 6.0.4       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Same scripts — core workflows unchanged |
 | `6.2.0` | 6.2.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Consolidated review, E2E TDD, `.claude/skills/` |
 | `6.4.0` | 6.4.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Skill renames, 9-step pipeline, unattended-by-default, anti-leak commits, auto-commit (incl. submodules), deferred-decisions log, epic-context cache |
+| `6.6.0` | 6.6.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `project_name` → `core/config.yaml` (#2348); tier-adaptive pipeline (lite/standard/full classifier) |
+| `6.8.0` | 6.8.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `.claude/skills/` support-file path fix (`${BMAD_SKILLS_ROOT}`); `baseline_commit` review-scope guard (#2403); `project_context` (#2422) |
 
 Root-level files are kept as a fallback for the latest version.
 
-> **Note:** No `6.3.0/` folder is shipped — 6.3.x users fall through the compatibility chain to `6.2.0`. This fork is personal and the user runs BMAD 6.4 directly.
+> **Note:** No `6.3.0/`, `6.5.0/`, or `6.7.0/` folder is shipped — those users fall through the compatibility chain to the nearest lower version (6.3.x → `6.2.0`, 6.5.x → `6.4.0`, 6.7.x → `6.6.0`). This fork is personal and the user runs the latest BMAD directly.
 
 ### BMAD 6.2 Architecture Change
 
@@ -39,6 +41,20 @@ This is a personal fork; the new behaviors below are baked-in **defaults with no
 - **Auto-commit per story at Step 9** — Amelia commits dirty submodules first (those messages MAY reference BMAD), then commits the main repo with an anti-leak-compliant message generated from `git diff --staged`. **Never auto-pushes** — push is a shared-state action and stays manual.
 - **Deferred-decisions log** — every former pause point now logs to `{implementation_artifacts}/sprint-epic-${EPIC_ID}-deferred-decisions.md` instead of asking. The user reviews the log post-sprint and resolves anything flagged `needs_human_review: yes` before pushing.
 - **Unattended by default** — only ambiguous merge conflicts (Step 6 / Step 9) cause a hard pause. Step failures retry once then block the story (not the sprint). The `--auto-fix` flag is now a no-op (kept for muscle-memory compatibility).
+
+### What's new in 6.6.0
+
+- **Config-source split (#2348)** — `project_name` moved from `_bmad/bmm/config.yaml` to `_bmad/core/config.yaml` (auto-migrated on upgrade). Phase 0 reads both files and prefers the `core` copy when both exist.
+- **Tier-adaptive pipeline** — a Sonnet classifier (Step 1.5) assigns each story a tier (`lite` / `standard` / `full`) that decides which downstream steps run. `lite` skips elicitation/validation/E2E TDD; `standard` (the default) skips only elicitation; `full` runs everything. New `STORY_ID:tier` suffix and global `--tier=` flag override the classifier (its recommendation is still logged). Tier is driven by File-List size and risk markers, not AC count.
+
+### What's new in 6.8.0
+
+The pipeline **interface is unchanged 6.6 → 6.8** — no skill renames, same command names, same story-status vocabulary. No document conversion is required for the pipeline's inputs (stories, epics, `sprint-status.yaml`, and PRDs are all forward-compatible). The 6.8 breaking changes — `bmad-create-ux-design` → `bmad-ux` (two-spine `DESIGN.md` + `EXPERIENCE.md`) and `bmad-distillator` → `bmad-spec` — are planning surfaces the sprint does not consume.
+
+- **`.claude/skills/` support-file path fix** — three steps read BMAD skill *support files* by explicit path (Step 2 `methods.csv`, Step 3 `create-story/checklist.md`, Phase 0 `compile-epic-context.md`). Since the 6.2 `.claude/skills/` move, those files live inside each skill's own directory and the redundant `_bmad/` copies are removed by the installer. Phase 0 now resolves `${BMAD_SKILLS_ROOT}` via a fallback cascade (`.claude/skills/` → legacy `_bmad/` layouts) and all three reads go through it. The old `_bmad/bmm/skills/` and `_bmad/core/workflows/` paths were stale.
+- **`baseline_commit` review-scope guard (#2403)** — `/bmad-dev-story` now stamps `baseline_commit` into story frontmatter, and `/bmad-code-review` uses it as the diff baseline. Because implementation runs in a worktree and sibling stories may merge before review, a raw baseline diff can over-scope the review to other stories' changes. Step 7 now constrains code-review to the story File List. (Bonus: a deterministic baseline + `yolo` keeps code-review fully unattended — no branch-confirm prompt.)
+- **`project_context` (#2422)** — added to the agent env block (optional, `**/project-context.md`, load-if-exists; the skills self-resolve it).
+- **`.decision-log.md` (6.7)** — confirmed planning-only (`bmad-prd` / `bmad-ux` / `bmad-product-brief` / `bmad-spec`); it never coexists with this skill's deferred-decisions log inside the pipeline.
 
 ## Installation
 
