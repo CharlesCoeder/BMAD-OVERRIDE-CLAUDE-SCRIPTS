@@ -1,6 +1,6 @@
 ---
 name: 'enhanced-automated-sprint'
-description: 'Run the full BMAD pipeline (BMAD 6.8-targeted) for multiple stories in an epic. Breaks stories into manageable tasks, tracks progress with TaskCreate/TaskUpdate, and uses focused agents for context efficiency. Supports parallel story execution. Unattended-by-default with anti-leak commit messages, auto-commit (incl. submodules), and a deferred-decisions log.'
+description: 'Run the full BMAD pipeline (BMAD 6.8-targeted) for multiple stories in an epic. Breaks stories into manageable tasks, tracks progress with TaskCreate/TaskUpdate, and uses focused agents for context efficiency. Supports parallel story execution. Unattended-by-default with anti-leak commit messages, auto-commit (incl. submodules), a deferred-decisions log, and an always-on per-step token-usage log.'
 ---
 
 <!-- BMAD 6.6.0 → 6.8.0 audit (do not delete)
@@ -23,6 +23,19 @@ description: 'Run the full BMAD pipeline (BMAD 6.8-targeted) for multiple storie
 - Classifier runs even when overridden — its recommendation is logged to ${DEFERRED_DECISIONS_PATH} for post-sprint visibility.
 - Rationale: smaller-scope stories were burning context on validation/elicitation/E2E that didn't pay off. Auto-classification + override flags let the user keep "always run the full pipeline" behavior with --tier=full.
 - Rubric refinement (post-initial): AC count dropped as a tier trigger (BMAD stories naturally have 15-20 ACs even when scope is narrow). Replaced with implementation-file-count from the story File List as the real complexity signal. Migration risk marker split: additive migrations (CREATE TABLE/INDEX, new RLS, additive ALTER) → standard; destructive migrations (DROP, type narrowing, NOT NULL on existing column, data-overwriting backfill) → full. Validated against river-journal stories 2-1 and 2-2: 2-1 (additive migration + 9 files) → standard, 2-2 (single-file pure function + 18 ACs) → standard. Both correctly avoid full-tier over-classification.
+-->
+
+<!-- 2026-07-15 token-data revision (epics 5–7 usage analysis; do not delete)
+Driven by docs/sprint{5,6,7}datausage.md — 22 stories, ~25.6M subagent tokens of harness-reported data. Changes:
+- Step 1.5 classifier: sonnet → HAIKU with a slim prompt (no ${BMAD_ENV_BLOCK}). Measured ~48k/story flat across all 22 stories (~90% fixed prompt overhead) for a keyword-scan + counting rubric. Safety guard added: a `lite` recommendation below high confidence is promoted to `standard` — under-classification (skipping validate/E2E on a story that needed them) is the only costly error direction; standard vs full boundary errors are cheap and self-correcting at review.
+- Classifier is now SKIPPED when a tier override applies (--tier= or :suffix). Supersedes the 6.6 note "classifier runs even when overridden" — the always-run rule cost ~48k/story for log-only output.
+- Step 9 (merge fixes + auto-commit): opus → SONNET. 22/22 stories showed pure git mechanics (avg 31–43k), zero judgment-requiring conflicts in sequential mode; leak scrubs are grep-driven. The ambiguous-conflict hard pause remains the escape hatch.
+- Step 10 folded into the coordinator: per-story sprint-status.yaml update is a coordinator-inline YAML edit + grep verify (proven organically on 5-6/5-8 with no quality loss; the dedicated agent cost 52–71k/story and was creeping upward). ONE /bmad-sprint-status reconcile agent runs at epic close-out.
+- Step 2 (elicitation) input capped: description/Story + ACs + Tasks/Subtasks + epic-context cache; Dev Notes read only selectively per-subsection. Step 2 grew 66k → 84k → 98k avg across epics 5→7 from re-reading ever-larger story files, not from more method work. Methods operate on ACs/tasks/description; technical grounding comes from the distilled epic-context cache.
+- Mid-epic context recompile: epic-context cache is recompiled after every 3rd completed story (validated in sprint 7b: post-recompile create-story dropped 224k → 138k; within-epic growth was +85% in epic 5, +68% in epic 6 without it).
+- Step 7 (review) liveness protocol: reviews are the #1 stall source (5-8, 6-6, 7-3, 7-5 — the stall tax outgrew every per-step cost). Coordinator nudges a silent review agent via SendMessage (resume repeatedly worked and costs a fraction of a ~130k respawn) and MUST collect late child-hunter findings before Step 9 commits (7-5's late child reports contained a real HIGH).
+- Steps 5 and 8 standardized on OPUS across every surface (TL;DR table, spawn templates, model-assignment table) — all 22 measured story runs used opus; copies of this skill had drifted, with sonnet lingering in one or more of those surfaces. Added missing Step 1.5 row to the model table.
+- NEW always-on token-usage log: the coordinator writes `{implementation_artifacts}/sprint-epic-${EPIC_ID}-token-usage.md` for every sprint (harness-reported subagent_tokens per spawn, incl. waste rows), no flag or user request needed. The epics 5–7 tuning above was only possible because this data was captured manually; now it's a default artifact. See "Token Usage Log (always on)".
 -->
 
 <!-- BMAD 6.2.0 → 6.4.0 skill-reference audit (do not delete; future upgrades use this as a baseline)
@@ -51,23 +64,23 @@ New defaults baked into 6.4.0 (no opt-out, this fork is personal):
 
 # Enhanced Automated Sprint Pipeline
 
-> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create -> classify tier -> (refine) -> (validate) -> (write E2E tests) -> implement -> consolidated code review -> fix issues -> merge fixes (auto-commit) -> update sprint status**. After Step 1 a Sonnet classifier picks a tier (`lite` / `standard` / `full`) per story; smaller-scope stories skip elicitation/validation/E2E to save context. BMAD 6.4's `/bmad-code-review` runs Blind Hunter, Edge Case Hunter, and Acceptance Auditor internally — no separate adversarial/edge-case steps needed. Stories can run in parallel when independent. **Unattended by default**: every former pause point auto-resolves with best-judgment and logs to a deferred-decisions doc; the only hard pause is ambiguous merge conflicts.
+> **TL;DR for humans:** This skill automates the entire dev lifecycle for multiple stories in an epic. You give it an epic ID (and optionally specific story IDs), and it runs each story through: **create -> classify tier -> (refine) -> (validate) -> (write E2E tests) -> implement -> consolidated code review -> fix issues -> merge fixes (auto-commit) -> update sprint status**. After Step 1 a Haiku classifier picks a tier (`lite` / `standard` / `full`) per story; smaller-scope stories skip elicitation/validation/E2E to save context. BMAD 6.4's `/bmad-code-review` runs Blind Hunter, Edge Case Hunter, and Acceptance Auditor internally — no separate adversarial/edge-case steps needed. Stories can run in parallel when independent. **Unattended by default**: every former pause point auto-resolves with best-judgment and logs to a deferred-decisions doc; the only hard pause is ambiguous merge conflicts. Every sprint also auto-writes a per-step **token-usage log** (`sprint-epic-<ID>-token-usage.md`) — no flag needed.
 >
 > **Usage:** `/enhanced-automated-sprint 7` or `/enhanced-automated-sprint 7 7-1:lite 7-2:full --parallel 2`
 >
 > | Step | What It Does | BMAD Command | Model | Tiers | Parallel? |
 > |------|-------------|--------------|-------|-------|-----------|
 > | 1 | Create story from epic | `/bmad-create-story` | Opus | all | Yes |
-> | 1.5 | Classify story tier (lite/standard/full) | _(rubric over story file)_ | Sonnet | all | Yes |
+> | 1.5 | Classify story tier (lite/standard/full) | _(rubric over story file; skipped when tier is overridden)_ | Haiku | all | Yes |
 > | 2 | Refine story via elicitation | _(auto-apply methods)_ | Opus | full | Yes |
 > | 3 | Validate story (fresh-context BMAD checklist runner) | _(executes `bmad-create-story/checklist.md`)_ | Sonnet | standard, full | Yes |
 > | 4 | Write TDD E2E tests (red phase) | `/bmad-qa-generate-e2e-tests` | Sonnet | standard, full | Yes |
-> | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Sonnet | all | Yes (worktree) |
+> | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Opus | all | Yes (worktree) |
 > | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | all | No (sequential) |
 > | 7 | Consolidated code review | `/bmad-code-review` | Opus | all | Yes |
-> | 8 | Fix review action items | _(targeted fixes)_ | Sonnet | all | Yes (worktree) |
-> | 9 | Merge fix branch + auto-commit (incl. submodules) | _(Amelia dev agent)_ | Opus | all | No (sequential) |
-> | 10 | Update sprint status | `/bmad-sprint-status` | Coordinator | all | No (sequential) |
+> | 8 | Fix review action items | _(targeted fixes)_ | Opus | all | Yes (worktree) |
+> | 9 | Merge fix branch + auto-commit (incl. submodules) | _(Amelia dev agent)_ | Sonnet | all | No (sequential) |
+> | 10 | Update sprint status | _(coordinator-inline YAML edit; one `/bmad-sprint-status` reconcile at epic close-out)_ | Coordinator | all | No (sequential) |
 
 Run the full BMAD pipeline for **multiple stories** in an epic using task-based tracking and focused agents.
 
@@ -211,6 +224,45 @@ When a decision was made in lieu of asking the user, append an entry to `${DEFER
 This block is included in agent prompts that have decision-point logic (Phase 0 plan log, Step 1 post-create, Step 3 FAIL handling, Step 7 picker, Size M+ warning, failure handling).
 </deferred-log>
 
+## Token Usage Log (always on)
+
+<token-usage-log CRITICAL="TRUE">
+Every sprint produces a token-usage log — no flag, no user request needed. This is the pipeline's cost telemetry: the 2026-07-15 tuning pass (Haiku classifier, Sonnet Step 9, Step 10 fold, etc.) was only possible because epics 5–7 usage was captured; from now on the data captures itself.
+
+Path: resolved in Phase 0 as `${TOKEN_USAGE_LOG_PATH}` = `{implementation_artifacts}/sprint-epic-${EPIC_ID}-token-usage.md`.
+
+**Coordinator-only artifact.** Do NOT add `${TOKEN_USAGE_LOG_PATH}` to `${BMAD_ENV_BLOCK}` and do NOT mention it in any agent prompt — agents cannot observe their own usage, so including it would only add fixed prompt overhead to every spawn (the exact waste pattern this log exists to catch).
+
+**Data source:** the harness reports each subagent's usage in the Agent tool result (`subagent_tokens`, tool-call count, wall-clock duration). Record figures EXACTLY as harness-reported — never estimate. If a figure is unobservable (e.g. a spawn killed before reporting), record what is known and note the gap.
+
+### File header (created at Phase 0; if the file exists from a prior run for this epic, append a separator + new sprint-run header — do NOT overwrite)
+
+```markdown
+# Epic ${EPIC_ID} Sprint — Subagent Token Usage
+
+All figures are harness-reported (`subagent_tokens` from each Agent tool result). Nothing is estimated. `subagent_tokens` is the agent's total run usage; `tools` = tool calls made; `dur` = wall-clock seconds.
+
+Sprint: `{full invocation}` — {story list}, {sequential|parallel N}, {tier notes}.
+Model key: O = Opus, S = Sonnet, H = Haiku.
+```
+
+### Logging rules (coordinator)
+
+1. **After EVERY agent result, append a row immediately** — `| Step | Model | Tokens | Tools | Dur (s) |` under the appropriate section (`## Phase 0 (Discovery)`, `### Story ${SID} (${tier} tier)`, `### Epic-level`). This includes Phase 0 agents, retries, killed/degraded/stalled spawns, SendMessage-resumed runs (log each attempt as its own row with a parenthetical, e.g. "attempt 1 (killed: session limit)", "resumed via SendMessage"), and epic-level agents. Waste rows are data, not noise — the stall tax was epics 5–7's biggest hidden cost.
+2. **Coordinator-inline work is not agent-billed** — Step 10 YAML flips, classifier-skip overrides, and task bookkeeping have no `subagent_tokens`; do not invent numbers for them. Where a step was skipped or folded, note it in the story table (e.g. "folded into Step 7 (coordinator grep-verified)").
+3. **After each story completes:** add the story's total to its section heading (sum of ALL its spawns including waste), e.g. `### Story 5-2 (standard tier) — total 826,991 (incl. 62,998 wasted on 2 failed spawns)`.
+4. **At sprint end, append:**
+   - Cross-story step averages table: `| Step | Runs | Avg tokens | Range | Notes |` (completed runs only; one-line notes flagging trends).
+   - Totals table: Phase 0 / stories / epic-level / waste (with event count and % of total) / sprint total.
+   - **Trim/bulk observations** — 3–6 bullets on what this sprint's data suggests. Compare against prior sprints when available: glob `{implementation_artifacts}/sprint-epic-*-token-usage.md` plus legacy `{project_knowledge}/sprint*datausage.md` files, and cite cross-sprint deltas (e.g. "Step 4 avg 194k → 233k").
+   - A note that coordinator (orchestrator) usage is not self-observable — point the user at `/cost` or the Claude-app session view for the authoritative number.
+5. **Append-only during the run** — never rewrite earlier rows (crash-safe; a dead session loses at most the current row). The sprint-end sections are the only post-hoc additions.
+
+### Sprint Summary integration
+
+The Sprint Summary (final output) MUST include a `### Token Usage` block: sprint total, avg/story, most expensive step (avg), waste % (event count), and the log path.
+</token-usage-log>
+
 ## Input Format
 
 ```
@@ -223,7 +275,7 @@ A story ID may carry an explicit tier suffix using a colon: `STORY_ID:lite`, `ST
 - `/enhanced-automated-sprint 5` — All `ready-for-dev` + `backlog` stories in Epic 5; each auto-classified after Step 1
 - `/enhanced-automated-sprint 5 5-1 5-2` — Only stories 5-1 and 5-2; both auto-classified
 - `/enhanced-automated-sprint 5 --parallel 2` — Epic 5, run up to 2 stories in parallel; each auto-classified
-- `/enhanced-automated-sprint 5 5-1:lite 5-2:full` — Force 5-1 to lite tier, 5-2 to full tier; classifier still runs but is overridden (its recommendation is still logged for visibility)
+- `/enhanced-automated-sprint 5 5-1:lite 5-2:full` — Force 5-1 to lite tier, 5-2 to full tier; the classifier is SKIPPED for overridden stories (the override + its source is logged to the deferred-decisions doc)
 - `/enhanced-automated-sprint 5 --tier=full` — Force every story in Epic 5 to full tier (legacy "always run the full pipeline" behavior)
 - `/enhanced-automated-sprint 5 5-1 --skip-elicitation` — Auto-classify, but unconditionally skip Step 2 even if classifier picks `full` (legacy flag, retained)
 
@@ -273,11 +325,13 @@ Before ANY pipeline work begins, the coordinator MUST:
    2. If valid: store its path as `${EPIC_CONTEXT_PATH}` and proceed.
    3. If missing or stale: spawn a single sub-agent (`subagent_type: general-purpose`, `model: sonnet`) whose prompt instructs it to read `${BMAD_SKILLS_ROOT}/bmad-quick-dev/compile-epic-context.md` (6.8: resolved in step 4a — canonical `.claude/skills/bmad-quick-dev/compile-epic-context.md`) and execute it against `${EPIC_ID}`, writing output to `{implementation_artifacts}/epic-${EPIC_ID}-context.md`. Do NOT inline the prompt — reference the BMAD file by path. Capture the path as `${EPIC_CONTEXT_PATH}`.
    4. Add `${EPIC_CONTEXT_PATH}` to `${BMAD_ENV_BLOCK}` so every downstream agent receives it.
+   5. **Mid-epic recompile rule:** the cache also goes stale as stories COMPLETE — predecessor context accumulates in the planning artifacts and Step 1 create-story cost grows with it (+85% within epic 5, +68% within epic 6). After every 3rd completed story in this run, recompile the cache (same sub-agent as §9.3) before the next story's Step 1. Validated in sprint 7b: create-story dropped 224k → 138k tokens immediately after a recompile.
 10. **Initialize deferred-decisions log.**
    1. Resolve `${DEFERRED_DECISIONS_PATH}` = `{implementation_artifacts}/sprint-epic-${EPIC_ID}-deferred-decisions.md`.
    2. If file does not exist: create with header `# Sprint Deferred Decisions — Epic ${EPIC_ID}\n\nSprint started: {ISO timestamp}\n\n`.
    3. If file already exists (prior run for this epic): append a separator + a new sprint-run header (do NOT overwrite).
    4. Add `${DEFERRED_DECISIONS_PATH}` to `${BMAD_ENV_BLOCK}` so every downstream agent can append entries.
+10a. **Initialize token-usage log.** Resolve `${TOKEN_USAGE_LOG_PATH}` = `{implementation_artifacts}/sprint-epic-${EPIC_ID}-token-usage.md`; create with the documented header (or append a new sprint-run header if it exists — same convention as the deferred-decisions log). Coordinator-only: do NOT add to `${BMAD_ENV_BLOCK}` (see Token Usage Log section). Log Phase 0's own agents (epic-context compile, skill probe) as its first rows.
 11. **Identify target stories:**
    - If STORY_IDS provided: use exactly those
    - If only EPIC_ID: collect all stories with status `ready-for-dev`, `backlog`, or `drafted` (legacy — auto-mapped to `ready-for-dev`). Skip `done`, `in-progress`.
@@ -294,15 +348,17 @@ Before ANY pipeline work begins, the coordinator MUST:
 ## Story Tier Classification (Step 1.5)
 
 <rules CRITICAL="TRUE">
-Tier classification runs **per story, immediately after Step 1 (Create Story) completes**, and **before Step 2 is unblocked**. The classifier reads the just-created story file plus `${EPIC_CONTEXT_PATH}` and emits one of `lite | standard | full`. The result determines which downstream tasks are auto-completed at creation time (see Per-Story Tasks below).
+Tier classification runs **per story, immediately after Step 1 (Create Story) completes**, and **before Step 2 is unblocked**. The classifier reads the just-created story file and emits one of `lite | standard | full`. The result determines which downstream tasks are auto-completed at creation time (see Per-Story Tasks below).
+
+This is a rubric-matching task — keyword scanning and counting, no design judgment — so it runs on **Haiku with a slim prompt** (no `${BMAD_ENV_BLOCK}`; the coordinator passes the two file paths it needs directly). Epics 5–7 data: the Sonnet version cost a flat ~48k/story, ~90% of it fixed prompt overhead, for a one-word answer.
 
 ### Resolution order (highest priority first)
 
 1. `${GLOBAL_TIER}` (from `--tier=` flag) — forces tier for every story in the run.
 2. `${TIER_HINT[SID]}` (from `STORY_ID:tier` suffix) — forces tier for this specific story.
-3. **Auto-classification** — Sonnet classifier output.
+3. **Auto-classification** — Haiku classifier output.
 
-The classifier ALWAYS runs even when 1 or 2 apply, because its recommendation is still logged to `${DEFERRED_DECISIONS_PATH}` for visibility (so the user can see whether the override agreed with the rubric).
+When 1 or 2 applies, the classifier is **SKIPPED entirely** — no agent spawn. The coordinator logs the override (chosen tier + source) to `${DEFERRED_DECISIONS_PATH}` and immediately auto-completes the skipped tasks. (The prior always-run-for-visibility rule cost ~48k/story for log-only output; if an epic is obviously uniform — e.g. all billing stories — pass `--tier=full` and pay zero classifier cost.)
 
 ### Classifier agent spec
 
@@ -310,13 +366,14 @@ The classifier ALWAYS runs even when 1 or 2 apply, because its recommendation is
 Task tool:
   description: "[${SID}] Classify story tier"
   subagent_type: general-purpose
-  model: sonnet
+  model: haiku
   prompt: |
-    ${BMAD_ENV_BLOCK}
+    You are classifying story ${SID} into a pipeline tier. This is a rubric-matching task:
+    keyword scanning and counting only — no design judgment, no speculation.
 
-    You are classifying story ${SID} into a pipeline tier. Read ONLY:
-    - The story file at {planning_artifacts}/stories/${SID}.md (or wherever bmad-create-story wrote it; check ${EPIC_CONTEXT_PATH} for path conventions)
-    - ${EPIC_CONTEXT_PATH}
+    Read ONLY:
+    - The story file at ${STORY_FILE_PATH}   (exact path from Step 1's return — do not search for it)
+    - ${EPIC_CONTEXT_PATH} ONLY IF the story file is missing a File List or size estimate
 
     Apply the rubric below and emit a single JSON object on the FINAL line of your response. No prose after the JSON.
 
@@ -345,11 +402,15 @@ Task tool:
 
 ### Coordinator handling of classifier output
 
-After the classifier returns:
+**Override path (no classifier ran):** append an entry to `${DEFERRED_DECISIONS_PATH}` with the chosen tier, source (`global-flag | per-story-suffix`), `confidence: high, needs_human_review: no`, and the note "classifier skipped (override)". Then jump to auto-completion (step 4 below).
 
-1. Resolve `${TIER[SID]}` per the resolution order above.
-2. Append an entry to `${DEFERRED_DECISIONS_PATH}` with: chosen tier, source (`global-flag | per-story-suffix | auto`), classifier recommendation, classifier confidence, classifier reasoning. If the chosen tier disagrees with the classifier recommendation, mark `confidence: medium, needs_human_review: yes` (override is honored, but flagged for post-sprint review).
-3. If classifier confidence is `low` AND there is no override: choose `standard` (safe default), log `confidence: low, needs_human_review: yes`.
+**Auto path** — after the classifier returns:
+
+1. Resolve `${TIER[SID]}` = classifier output, subject to the guards in steps 2–3.
+2. Append an entry to `${DEFERRED_DECISIONS_PATH}` with: chosen tier, source `auto`, classifier recommendation, classifier confidence, classifier reasoning.
+3. Confidence guards:
+   - If confidence is `low`: choose `standard` (safe default), log `confidence: low, needs_human_review: yes`.
+   - **Haiku guard:** if the recommendation is `lite` with confidence below `high`: choose `standard` instead and log it. Under-classification (skipping validation/E2E on a story that needed them) is the only costly error direction; a borderline `standard`-vs-`full` call is cheap because Step 7's consolidated review still runs on every tier.
 4. **Auto-complete skipped tasks immediately** — using TaskUpdate, mark the appropriate per-story tasks as `completed`:
    - tier = `lite`: complete Steps 2, 3, 4 (in addition to any tasks the classifier just unblocked)
    - tier = `standard`: complete Step 2 only
@@ -416,8 +477,11 @@ Skip rules (applied additively):
 
 | Task Subject | ActiveForm | Blocked By |
 |---|---|---|
+| `[Epic ${EPIC_ID}] Sprint-status reconcile` | `Reconciling sprint-status.yaml via /bmad-sprint-status` | All stories' Step 10 |
 | `[Epic ${EPIC_ID}] Cross-story integration check` | `Running cross-story integration verification` | All stories' Step 10 |
-| `[Epic ${EPIC_ID}] Sprint summary` | `Generating sprint summary` | `[Epic ${EPIC_ID}] Cross-story integration check` |
+| `[Epic ${EPIC_ID}] Sprint summary` | `Generating sprint summary` | `[Epic ${EPIC_ID}] Cross-story integration check` + `[Epic ${EPIC_ID}] Sprint-status reconcile` |
+
+**Sprint-status reconcile** is the sprint's ONE `/bmad-sprint-status` delegation (Sonnet agent). Per-story Step 10 updates are coordinator-inline YAML edits (see Step 10 template); this close-out run validates and normalizes them, updates epic-level status, and catches anything the inline edits missed. It can run in the same wave as the integration check (different files).
 
 **Cross-story integration check** runs AFTER all stories are individually complete. It verifies that stories don't break each other when combined:
 1. Run: `${test_command}` — full test suite (catches cross-story conflicts like duplicate routes, naming collisions)
@@ -434,13 +498,13 @@ The coordinator runs a **wave-based execution loop**. Each iteration:
 1. **Call TaskList** — get all tasks and their statuses
 2. **Identify ALL unblocked tasks** — tasks where every `blockedBy` dependency is `completed`
 3. **Group unblocked tasks by concurrency rules:**
-   - Steps 1, 1.5, 2, 3 (story creation / tier classification / elicitation / validation): **PARALLEL** — no shared files. Step 1.5 is read-only Sonnet classification.
+   - Steps 1, 1.5, 2, 3 (story creation / tier classification / elicitation / validation): **PARALLEL** — no shared files. Step 1.5 is read-only Haiku classification (skipped entirely when the tier is overridden).
    - Step 4 (TDD E2E): **PARALLEL** — safe because E2E test files are story-scoped. Each agent writes only to its own story's E2E test files. If stories share a test file, fall back to SEQUENTIAL for Step 4.
    - Step 5 (implementation): **PARALLEL in worktrees** — `isolation: "worktree"` gives each agent its own repo copy
    - Steps 6, 9 (merges): **SEQUENTIAL** — merge one worktree branch at a time to avoid race conditions; Step 9 also performs auto-commit
    - Step 7 (consolidated review): **PARALLEL** — read-only analysis. BMAD 6.4 runs Blind Hunter, Edge Case Hunter, and Acceptance Auditor internally within a single `/bmad-code-review` invocation.
    - Step 8 (fixes): **PARALLEL in worktrees** — same worktree isolation as Step 5
-   - Step 10: **COORDINATOR-SEQUENTIAL** — delegates to `/bmad-sprint-status` one story at a time. Two concurrent writes to the same YAML file = data loss.
+   - Step 10: **COORDINATOR-INLINE** — the coordinator itself edits the story's entry in `sprint-status.yaml` (status-field flip + grep verify), one story at a time. No agent spawn. Two concurrent writes to the same YAML file = data loss.
 4. **Spawn agents for ALL parallelizable unblocked tasks in a SINGLE message** — this is how Claude Code runs agents concurrently. Multiple Task tool calls in one response = true parallelism.
 5. **Wait for all spawned agents to complete**
 6. **Mark completed tasks, report results, loop back to step 1**
@@ -463,7 +527,7 @@ Wave 9:  [A-1] Step 7 + [A-2] Step 7                 parallel (consolidated revi
 Wave 10: [A-1] Step 8 + [A-2] Step 8 (worktrees)     parallel (fixes)
 Wave 11: [A-1] Step 9                                 SEQUENTIAL merge + auto-commit
 Wave 12: [A-2] Step 9                                 SEQUENTIAL merge + auto-commit
-Wave 13: [A-1] Step 10, then [A-2] Step 10           COORDINATOR-SEQUENTIAL
+Wave 13: [A-1] Step 10, then [A-2] Step 10           COORDINATOR-INLINE (no agent spawn)
 ```
 
 **Tier-aware throughput:** Lite stories burn through 2/3/4 instantly (TaskUpdate-only, no agent spawn) and reach Step 5 in the same wave a `full` peer is still on Step 4. The `--parallel N` cap on concurrent worktrees is still respected — lite stories just fill the wave faster. If all stories in a run are `lite`, the wave count collapses dramatically (no Steps 2/3/4 agents at all).
@@ -497,14 +561,14 @@ These are the ONLY serialization points in the pipeline. Merges run one at a tim
 | Step | What | Who |
 |------|------|-----|
 | Step 6: Merge implementation | Merge worktree branch from Step 5 into working branch (NO auto-commit downstream) | **BMAD Dev Agent (Amelia)** — Opus |
-| Step 9: Merge fixes + auto-commit | Merge worktree branch from Step 8 into working branch, then auto-commit (submodule-first, then main repo, anti-leak applied) | **BMAD Dev Agent (Amelia)** — Opus |
+| Step 9: Merge fixes + auto-commit | Merge worktree branch from Step 8 into working branch, then auto-commit (submodule-first, then main repo, anti-leak applied) | **BMAD Dev Agent (Amelia)** — Sonnet |
 
 All other steps parallelize freely because they either:
 - Write to story-specific files (Steps 1, 2, 4)
 - Run in isolated worktrees (Steps 5, 8)
 - Are read-only analysis (Steps 3, 7)
 
-Step 10 delegates to `/bmad-sprint-status` and runs sequentially (shared `sprint-status.yaml` file).
+Step 10 is a coordinator-inline `sprint-status.yaml` edit, one story at a time (shared file); a single `/bmad-sprint-status` reconcile agent runs once at epic close-out.
 </parallel-execution>
 
 ## Execution Rules
@@ -514,12 +578,13 @@ Step 10 delegates to `/bmad-sprint-status` and runs sequentially (shared `sprint
 2. **One agent per step** — each step spawns a focused Task agent. Do NOT pass full conversation history. DO pass `${BMAD_ENV_BLOCK}` to every agent — environment variables are configuration, not history. For Steps 5, 6, 8, 9 ALSO prepend `${ANTI_LEAK_BLOCK}` immediately after `${BMAD_ENV_BLOCK}`.
 3. **PARALLEL by default** — when multiple tasks are unblocked AND parallelizable (see Sequential Gate Rules above), spawn them ALL in a single message. This is the core performance advantage of the enhanced pipeline.
 4. **TaskUpdate before and after** — mark task `in_progress` BEFORE spawning the agent, mark `completed` AFTER agent succeeds
+4a. **Log token usage after EVERY agent result** — append the harness-reported `subagent_tokens` / tool count / duration row to `${TOKEN_USAGE_LOG_PATH}` per the Token Usage Log rules (retries, killed/degraded spawns, and resumes included). This is always on.
 5. **TaskList after each wave** — check what's unblocked next
 6. **Failure stops the STORY, not the sprint** — on step failure: log to `${DEFERRED_DECISIONS_PATH}` and retry once with the same agent. On second failure, mark the story `blocked`, log a follow-up entry, and continue with other independent stories.
 7. **Context budget per agent:** Each agent should read at most 5-8 files. If a step needs more context, break it into sub-agents.
 8. **Steps 8 + 9 are conditional** — only create a fix agent if Step 7 produced action items. If Step 7 (consolidated review) reports no action items, mark BOTH 8 AND 9 as completed immediately and proceed to Step 10. If Step 7 produced ONLY Medium/Low items (which are deferred to the log), also mark 8 + 9 completed and proceed to Step 10.
 8a. **Tasks/Subtasks validation gate** — after Step 5 completes, the coordinator MUST check the agent's return for "Tasks/Subtasks completion". If the agent reports incomplete tasks or does NOT confirm story file was updated, the coordinator logs a `confidence: low, needs_human_review: yes` entry to `${DEFERRED_DECISIONS_PATH}` and proceeds (does not pause). The story file's `## Tasks / Subtasks` section is the source of truth for implementation completeness — test results alone are NOT sufficient.
-9. **Step 10 uses BMAD** — delegate to `/bmad-sprint-status` to update sprint-status.yaml, one story at a time (sequential)
+9. **Step 10 is coordinator-inline** — the coordinator updates sprint-status.yaml itself (flip story ${SID} to its final status, grep-verify the edit), one story at a time. Do NOT spawn a per-story agent for this — the dedicated agent measured 52–71k tokens/story for a one-line YAML flip, and the inline fold was proven on stories 5-6/5-8 with no quality loss. A single `/bmad-sprint-status` reconcile agent runs ONCE at epic close-out (see Epic-Level Tasks).
 10. **Progress checkpoints** — after every wave, output a progress summary to the user
 11. **If context feels heavy** — after completing a full story's pipeline, output a handoff summary and suggest the user refresh the session if more stories remain
 12. **Skill invocation** — BMAD 6.4 uses `.claude/skills/` with `SKILL.md` entry points. When invoking `/bmad-*` skills inside agents, the coordinator should verify skill paths match the detected `${SKILL_ARCH}` from Phase 0. If skills are in `.claude/skills/`, agents invoke them as `/bmad-*` (unchanged command name). If the Skill tool is unavailable inside Task agents, fall back to inline-workflow mode.
@@ -579,12 +644,22 @@ Task tool:
 
     You are enhancing story ${SID} via advanced elicitation. This is FULLY AUTOMATED.
 
-    1. Read the story file at: ${STORY_FILE_PATH}
+    INPUT CAP (token discipline — this step's cost grew 50% across three epics purely from
+    re-reading ever-larger story files, not from more method work):
+    Read ONLY these story-file sections: the header (Status / Story / description), 
+    "## Acceptance Criteria", and "## Tasks / Subtasks". Do NOT read "## Dev Notes" or any
+    pasted reference/architecture excerpts up front — technical grounding comes from
+    ${EPIC_CONTEXT_PATH} (already distilled). If a selected method genuinely needs a specific
+    technical detail the epic context lacks, read just that one Dev Notes subsection.
+    Apply your enhancements as targeted edits to those sections — do NOT rewrite the whole file.
+
+    1. Read the capped sections of the story file at: ${STORY_FILE_PATH} (per INPUT CAP above),
+       plus ${EPIC_CONTEXT_PATH}
     2. Read methods CSV at: ${BMAD_SKILLS_ROOT}/bmad-advanced-elicitation/methods.csv
        (6.8: canonical `.claude/skills/bmad-advanced-elicitation/methods.csv`; resolved in Phase 0 step 4a. NOTE: 6.8 added a `framing` category + 19 new techniques, all 50 prior methods preserved — selection logic is unaffected.)
     3. Auto-select the 3 methods most relevant to this story's context
     4. Apply each method in sequence to enhance the story
-    5. Save the enhanced story file (overwrite at ${STORY_FILE_PATH})
+    5. Save the enhanced story sections back to ${STORY_FILE_PATH} via targeted edits (leave Dev Notes and other unread sections untouched)
     6. Report ONLY THE DELTA — what changed, section by section
 
     CRITICAL: After elicitation, verify the "## Tasks / Subtasks" section still contains real,
@@ -666,7 +741,7 @@ Task tool:
 Task tool:
   description: "[${SID}] Implement"
   subagent_type: general-purpose
-  model: sonnet
+  model: opus
   isolation: "worktree"          <- agent gets its own repo copy (only when parallel)
   prompt: |
     ${BMAD_ENV_BLOCK}
@@ -865,12 +940,17 @@ Task tool:
 
 **Coordinator note:** This single step replaces the old Steps 7 (code review), 8 (adversarial review), 8b (edge case hunter), AND 10 (AC trace). BMAD 6.4 runs all three review types internally and the Acceptance Auditor's per-AC verdict supplants the standalone AC-trace step. The coordinator receives unified findings with source attribution and routes them per the Decision Points rules.
 
+**Coordinator liveness protocol (Step 7) — CRITICAL:** Review is the pipeline's most stall-prone step (four incidents across epics 5–7; the stall tax outgrew every per-step cost). Two rules:
+
+1. **Nudge before respawn.** If a Step 7 agent has gone silent well past its normal envelope (clean reviews finish in ~4–15 min), send it a SendMessage nudge ("continue the review; if the Acceptance Auditor pass hasn't run yet, run it now and return the consolidated findings") instead of killing and respawning. Resuming a stalled reviewer worked on 5-8, 6-6, and 7-5, and costs a fraction of a fresh ~130k spawn. A respawn (only if the nudge fails) counts as the one retry under Decision Point #5.
+2. **Collect late child findings before committing.** If the review parent spawned internal hunter sub-agents and stalled or died before consolidating them, the coordinator MUST collect those children's findings and route them through the normal severity triage BEFORE Step 9's auto-commit runs. In 7-5, late-delivered child reports contained a real HIGH (stale dialog state on reopen) that had to be fixed post-commit. Step 9 must never commit while review child findings are outstanding.
+
 #### Step 8: Fix Action Items (Conditional, Worktree Isolated)
 ```
 Task tool:
   description: "[${SID}] Fix review items"
   subagent_type: general-purpose
-  model: sonnet
+  model: opus
   isolation: "worktree"          <- fixes run in isolated worktree (only when parallel)
   prompt: |
     ${BMAD_ENV_BLOCK}
@@ -911,6 +991,7 @@ Task tool:
 
 Same agent template as Step 6 (Amelia, Senior Software Engineer persona) with `${BMAD_ENV_BLOCK}` and `${ANTI_LEAK_BLOCK}` included in the prompt, but with:
 - Description: `"[${SID}] Dev merge fixes"`
+- **`model: sonnet`** (NOT opus — 22 stories of data show this step is pure git mechanics averaging 31–43k with zero judgment-requiring conflicts; leak scrubs are grep-driven. The ambiguous-conflict hard pause in the merge protocol remains the escape hatch: Sonnet detects ambiguity and STOPS, it doesn't resolve it)
 - Worktree branch/path from Step 8 result
 - Merge commit message generated under `${ANTI_LEAK_BLOCK}` (no story ID, no "BMAD", no AC numbers)
 - An ADDITIONAL post-merge sub-section: **Step 7 — Auto-commit** (see below). Insert this between the existing post-merge verification (sub-step 5 in Step 6) and cleanup (sub-step 6 in Step 6).
@@ -971,12 +1052,19 @@ In addition to the Step 6 return fields, Step 9 MUST return:
 - commit_message_anti_leak_check: pass | fail | manual_review_needed
 ```
 
-#### Step 10: Update Sprint Status
+#### Step 10: Update Sprint Status (Coordinator-Inline — NO agent spawn)
 ```
-Coordinator delegates to:  /bmad-sprint-status
-One story at a time (sequential — shared sprint-status.yaml file).
-The coordinator translates Step 9's return contract into the appropriate sprint-status.yaml
-updates for story ${SID}.
+The coordinator performs this itself, one story at a time (shared sprint-status.yaml file):
+1. Translate Step 9's return contract (or Step 7's, when 8/9 were skipped) into the story's
+   final status.
+2. Edit {implementation_artifacts}/sprint-status.yaml directly: flip story ${SID}'s status
+   field (and any per-story fields the file tracks, e.g. commit SHA).
+3. Grep-verify the edit landed (`grep -A2 "${SID}" sprint-status.yaml`).
+4. Mark the Step 10 task completed.
+
+Epic close-out: after ALL stories' Step 10 are done, ONE /bmad-sprint-status reconcile agent
+runs (see Epic-Level Tasks) to validate/normalize the inline edits and close out epic-level
+status. This replaces N per-story agents (52–71k each) with one ~60k run per sprint.
 ```
 
 ## Step Output Requirements
@@ -1075,6 +1163,7 @@ Step 5 (Implementation) can detect a "Senior Developer Review (AI)" section in t
 - **Agent timeout/crash:** Mark task as pending (not completed), log to `${DEFERRED_DECISIONS_PATH}` (`confidence: low, needs_human_review: yes`), retry once per Decision Point #5. On second failure, mark the story `blocked` and continue with other stories.
 - **Test failures in Step 5:** Agent should attempt to fix. If still failing after implementation, log to `${DEFERRED_DECISIONS_PATH}` and surface in the agent's return; the coordinator applies retry-once-then-block per Decision Point #5.
 - **Build failure:** Same as test failure — agent attempts fix, then retry-once-then-block.
+- **Step 7 review stall:** apply the Step 7 coordinator liveness protocol — SendMessage nudge first; respawn only if the nudge fails (that respawn is the one retry per Decision Point #5). Never run Step 9's auto-commit while review child-agent findings are outstanding.
 - **Circular story dependency:** Detected in Phase 0, reported immediately, pipeline does not start.
 - **All stories failed:** Output summary of failures and the deferred-decisions log path; suggest `/bmad-correct-course`.
 - **Post-merge rollback (Step 7 finds critical issue after Step 6 merge):**
@@ -1112,6 +1201,13 @@ After ALL stories complete (or fail):
 - Path: ${DEFERRED_DECISIONS_PATH}
 - Review before pushing: open the file and resolve any `needs_human_review: yes` entries.
 
+### Token Usage
+- Sprint total (subagents only): [tokens]
+- Avg per story: [tokens] | Most expensive step: [step] ([avg])
+- Waste: [tokens] ([N] events, [%] of total)
+- Full log: ${TOKEN_USAGE_LOG_PATH}
+- Coordinator usage not included — check /cost for the session total.
+
 ### Epic Status
 - Epic ${EPIC_ID}: [in-progress / done]
 - Remaining stories: [list or "none — epic complete!"]
@@ -1133,12 +1229,13 @@ After ALL stories complete (or fail):
 |------|-------|-----------|-----------|
 | Phase 0: Discovery | coordinator | — | Reads YAML/MD, creates tasks, compiles epic-context cache, initializes deferred-decisions log — no agent needed (epic-context compile spawns one sub-agent only on cache miss) |
 | Step 1: Create story | opus | — | Story authoring needs deep epic context understanding |
-| Step 2: Elicitation | opus | — | Method selection requires nuanced judgment |
+| Step 1.5: Classify tier | **haiku** | — | Rubric keyword-scan + counting; slim prompt (no env block); skipped entirely on tier override. Guard: `lite` below high confidence promotes to `standard` |
+| Step 2: Elicitation | opus | — | Method selection requires nuanced judgment; input capped to description + ACs + Tasks/Subtasks + epic-context cache |
 | Step 3: Validate (BMAD checklist runner) | sonnet | — | Mechanical 8-step checklist execution against the story spec; sonnet is the second opinion (different model from Step 1 opus = real diversity), and checklist work doesn't need opus reasoning |
 | Step 4: TDD E2E | sonnet | — | E2E test generation from ACs, speed matters |
-| Step 5: Implementation | sonnet | **worktree** | Longest step, worktree enables parallel execution across stories; Amelia writes Kent-Beck-style unit tests inline |
+| Step 5: Implementation | opus | **worktree** | Longest step, worktree enables parallel execution across stories; Amelia writes Kent-Beck-style unit tests inline |
 | Step 6: Merge impl | **opus** | — | **BMAD Dev Agent (Amelia)** — senior engineer merge judgment, conflict resolution, post-merge verification (NO auto-commit) |
 | Step 7: Consolidated review | opus | — | BMAD 6.4 runs Blind Hunter + Edge Case Hunter + Acceptance Auditor internally; Acceptance Auditor's per-AC verdict supplants the dropped AC-trace step |
-| Step 8: Fixes | sonnet | **worktree** | Targeted fixes for Critical/High items in isolation, parallelizable across stories |
-| Step 9: Merge fixes + auto-commit | **opus** | — | **BMAD Dev Agent (Amelia)** — same merge protocol as Step 6 PLUS the per-story auto-commit sequence (submodule-first, then main repo, anti-leak applied; never auto-pushes) |
-| Step 10: Sprint status | coordinator | — | Delegates to `/bmad-sprint-status` sequentially |
+| Step 8: Fixes | opus | **worktree** | Targeted fixes for Critical/High items in isolation, parallelizable across stories |
+| Step 9: Merge fixes + auto-commit | **sonnet** | — | **BMAD Dev Agent (Amelia)** — same merge protocol as Step 6 PLUS the per-story auto-commit sequence. Downgraded from opus: 22/22 stories were pure git mechanics; ambiguous conflicts still hard-pause |
+| Step 10: Sprint status | coordinator | — | Coordinator-inline YAML edit + grep verify per story; ONE `/bmad-sprint-status` reconcile agent (sonnet) at epic close-out |

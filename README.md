@@ -13,7 +13,7 @@ Scripts are organized by exact BMAD version. The installer auto-detects your BMA
 | `6.2.0` | 6.2.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Consolidated review, E2E TDD, `.claude/skills/` |
 | `6.4.0` | 6.4.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Skill renames, 9-step pipeline, unattended-by-default, anti-leak commits, auto-commit (incl. submodules), deferred-decisions log, epic-context cache |
 | `6.6.0` | 6.6.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `project_name` → `core/config.yaml` (#2348); tier-adaptive pipeline (lite/standard/full classifier) |
-| `6.8.0` | 6.8.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `.claude/skills/` support-file path fix (`${BMAD_SKILLS_ROOT}`); `baseline_commit` review-scope guard (#2403); `project_context` (#2422) |
+| `6.8.0` | 6.8.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `.claude/skills/` support-file path fix (`${BMAD_SKILLS_ROOT}`); `baseline_commit` review-scope guard (#2403); `project_context` (#2422); token-data tuning (Haiku classifier, Sonnet Step 9, Step 10 fold); always-on token-usage log |
 
 Root-level files are kept as a fallback for the latest version.
 
@@ -55,6 +55,19 @@ The pipeline **interface is unchanged 6.6 → 6.8** — no skill renames, same c
 - **`baseline_commit` review-scope guard (#2403)** — `/bmad-dev-story` now stamps `baseline_commit` into story frontmatter, and `/bmad-code-review` uses it as the diff baseline. Because implementation runs in a worktree and sibling stories may merge before review, a raw baseline diff can over-scope the review to other stories' changes. Step 7 now constrains code-review to the story File List. (Bonus: a deterministic baseline + `yolo` keeps code-review fully unattended — no branch-confirm prompt.)
 - **`project_context` (#2422)** — added to the agent env block (optional, `**/project-context.md`, load-if-exists; the skills self-resolve it).
 - **`.decision-log.md` (6.7)** — confirmed planning-only (`bmad-prd` / `bmad-ux` / `bmad-product-brief` / `bmad-spec`); it never coexists with this skill's deferred-decisions log inside the pipeline.
+
+#### 2026-07-15 in-version revision — token-data tuning + always-on usage log
+
+Driven by three sprints of harness-reported usage data (22 stories, ~25.6M subagent tokens across epics 5–7):
+
+- **Always-on token-usage log** — the coordinator writes `{implementation_artifacts}/sprint-epic-<ID>-token-usage.md` for **every sprint by default** (no flag, no request needed): a row per agent spawn (harness-reported `subagent_tokens`, tool calls, wall-clock) including retries and killed/degraded/stalled spawns, per-story totals, and sprint-end step averages, totals, waste %, and trim/bulk observations compared against prior sprints' logs. Coordinator-only — never injected into agent prompts.
+- **Step 1.5 classifier: Sonnet → Haiku** with a slim prompt (no env block). Was a flat ~48k/story (~90% fixed prompt overhead) for a keyword-scan rubric. Tier overrides (`--tier=`, `:suffix`) now **skip the classifier entirely**. Safety guard: a `lite` verdict below high confidence is promoted to `standard`.
+- **Step 9 (merge fixes + auto-commit): Opus → Sonnet** — 22/22 stories were pure git mechanics (31–43k avg); the ambiguous-conflict hard pause remains the escape hatch.
+- **Step 10 folded into the coordinator** — per-story `sprint-status.yaml` updates are inline YAML edits + grep verify; ONE `/bmad-sprint-status` reconcile agent runs at epic close-out (was 52–71k per story).
+- **Step 2 elicitation input cap** — reads story description + ACs + Tasks/Subtasks + the epic-context cache; Dev Notes only per-subsection on demand (the step had grown 66k → 98k avg purely from story-file bloat).
+- **Mid-epic context recompile** — the epic-context cache recompiles after every 3rd completed story (validated: create-story dropped 224k → 138k immediately after a recompile; within-epic growth was +85% without it).
+- **Step 7 review liveness protocol** — reviews were the #1 stall source (4 incidents in 3 sprints). The coordinator now nudges silent reviewers via SendMessage (resume beats a ~130k respawn) and must collect late child-hunter findings before Step 9 commits.
+- **Steps 5/8 standardized on Opus** across all surfaces (TL;DR, templates, model table) — copies had drifted to Sonnet; every measured run used Opus.
 
 ## Installation
 
