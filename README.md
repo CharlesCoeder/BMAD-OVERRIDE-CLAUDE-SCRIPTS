@@ -58,14 +58,14 @@ The pipeline **interface is unchanged 6.6 → 6.8** — no skill renames, same c
 
 #### 2026-07-15 in-version revision — token-data tuning + always-on usage log
 
-Driven by three sprints of harness-reported usage data (22 stories, ~25.6M subagent tokens across epics 5–7):
+Driven by three consecutive sprints of harness-reported usage data (22 stories, ~25.6M subagent tokens):
 
 - **Always-on token-usage log** — the coordinator writes `{implementation_artifacts}/sprint-epic-<ID>-token-usage.md` for **every sprint by default** (no flag, no request needed): a row per agent spawn (harness-reported `subagent_tokens`, tool calls, wall-clock) including retries and killed/degraded/stalled spawns, per-story totals, and sprint-end step averages, totals, waste %, and trim/bulk observations compared against prior sprints' logs. Coordinator-only — never injected into agent prompts.
 - **Step 1.5 classifier: Sonnet → Haiku** with a slim prompt (no env block). Was a flat ~48k/story (~90% fixed prompt overhead) for a keyword-scan rubric. Tier overrides (`--tier=`, `:suffix`) now **skip the classifier entirely**. Safety guard: a `lite` verdict below high confidence is promoted to `standard`.
 - **Step 9 (merge fixes + auto-commit): Opus → Sonnet** — 22/22 stories were pure git mechanics (31–43k avg); the ambiguous-conflict hard pause remains the escape hatch.
 - **Step 10 folded into the coordinator** — per-story `sprint-status.yaml` updates are inline YAML edits + grep verify; ONE `/bmad-sprint-status` reconcile agent runs at epic close-out (was 52–71k per story).
 - **Step 2 elicitation input cap** — reads story description + ACs + Tasks/Subtasks + the epic-context cache; Dev Notes only per-subsection on demand (the step had grown 66k → 98k avg purely from story-file bloat).
-- **Mid-epic context recompile** — the epic-context cache recompiles after every 3rd completed story (validated: create-story dropped 224k → 138k immediately after a recompile; within-epic growth was +85% without it).
+- **Mid-epic context recompile** — the epic-context cache recompiles after every 3rd completed story (validated: create-story cost dropped ~40% immediately after a mid-sprint recompile; within-sprint growth was +68–85% without it).
 - **Step 7 review liveness protocol** — reviews were the #1 stall source (4 incidents in 3 sprints). The coordinator now nudges silent reviewers via SendMessage (resume beats a ~130k respawn) and must collect late child-hunter findings before Step 9 commits.
 - **Steps 5/8 standardized on Opus** across all surfaces (TL;DR, templates, model table) — copies had drifted to Sonnet; every measured run used Opus.
 
