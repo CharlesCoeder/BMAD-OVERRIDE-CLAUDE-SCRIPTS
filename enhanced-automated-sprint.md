@@ -34,7 +34,7 @@ Driven by three consecutive sprints of harness-reported subagent usage logs — 
 - Step 2 (elicitation) input capped: description/Story + ACs + Tasks/Subtasks + epic-context cache; Dev Notes read only selectively per-subsection. Step 2 grew ~50% (66k → 98k avg) across the three measured sprints from re-reading ever-larger story files, not from more method work. Methods operate on ACs/tasks/description; technical grounding comes from the distilled epic-context cache.
 - Mid-epic context recompile: epic-context cache is recompiled after every 3rd completed story (validated in practice: create-story dropped ~40% — 224k → 138k — immediately after a mid-sprint recompile; within-sprint growth was +68–85% without it).
 - Step 7 (review) liveness protocol: reviews are the #1 stall source (four incidents across the three measured sprints — the stall tax outgrew every per-step cost). Coordinator nudges a silent review agent via SendMessage (resume repeatedly worked and costs a fraction of a ~130k respawn) and MUST collect late child-hunter findings before Step 9 commits (in one incident, late child reports contained a real HIGH).
-- Steps 5 and 8 standardized on OPUS across every surface (TL;DR table, spawn templates, model-assignment table) — all 22 measured story runs used opus; copies of this skill had drifted, with sonnet lingering in one or more of those surfaces. Added missing Step 1.5 row to the model table.
+- Model assignments rationalized from the data. Context: the measured sprints deliberately ran an intelligence-beefed config (opus on most steps, strongest-available model as coordinator) because a new frontier tier had just shipped; with usage data in hand, assignments are now per-step decisions rather than a blanket beef-up. Step 5 implement: OPUS everywhere (every measured run used it; implementation quality is the core deliverable and rework costs more than the tier delta). Step 8 fixes: SEVERITY-ADAPTIVE — sonnet default (it handled routine Critical/High fix batches fine across two sprints), escalated to opus for Critical, redesign-scope, or security/payment-surface items (this codifies what coordinators did organically). Step 6 merge: opus, but it only ever spawns in parallel mode (sequential runs never pay it; conflict resolution is the judgment-heavy case). Steps 1/2/7 stay opus — authoring quality compounds downstream, and elicitation + review produced the measured sprints' highest-value catches. Added missing Step 1.5 row to the model table + a coordinator-model note.
 - NEW always-on token-usage log: the coordinator writes `{implementation_artifacts}/sprint-epic-${EPIC_ID}-token-usage.md` for every sprint (harness-reported subagent_tokens per spawn, incl. waste rows), no flag or user request needed. The tuning above was only possible because this data was captured manually across three sprints; now it's a default artifact. See "Token Usage Log (always on)".
 -->
 
@@ -78,7 +78,7 @@ New defaults baked into 6.4.0 (no opt-out, this fork is personal):
 > | 5 | Implement code to pass all tests (TDD unit tests written inline by Amelia) | `/bmad-dev-story` | Opus | all | Yes (worktree) |
 > | 6 | Merge implementation branch | _(Amelia dev agent)_ | Opus | all | No (sequential) |
 > | 7 | Consolidated code review | `/bmad-code-review` | Opus | all | Yes |
-> | 8 | Fix review action items | _(targeted fixes)_ | Opus | all | Yes (worktree) |
+> | 8 | Fix review action items | _(targeted fixes)_ | Sonnet (Opus on escalation) | all | Yes (worktree) |
 > | 9 | Merge fix branch + auto-commit (incl. submodules) | _(Amelia dev agent)_ | Sonnet | all | No (sequential) |
 > | 10 | Update sprint status | _(coordinator-inline YAML edit; one `/bmad-sprint-status` reconcile at epic close-out)_ | Coordinator | all | No (sequential) |
 
@@ -950,7 +950,7 @@ Task tool:
 Task tool:
   description: "[${SID}] Fix review items"
   subagent_type: general-purpose
-  model: opus
+  model: sonnet                  <- default; coordinator escalates to opus per the rule below
   isolation: "worktree"          <- fixes run in isolated worktree (only when parallel)
   prompt: |
     ${BMAD_ENV_BLOCK}
@@ -984,6 +984,13 @@ Task tool:
     Return to coordinator: each fix with before/after, test count, typecheck status, build status, story file Tasks/Subtasks status.
     IMPORTANT: Your changes are in a worktree branch. Do NOT merge — the coordinator handles merging.
 ```
+
+**Model escalation rule (Step 8):** default `sonnet` — measured sprints showed it handles routine Critical/High fix batches (localized guards, AC-gap patches, teardown races) with no quality bounce-back. Spawn with `model: opus` instead when ANY routed item is:
+- Critical severity, OR
+- redesign-scope — the fix changes control flow, state lifecycle, or architecture rather than adding a localized guard (a measured HIGH silent-error redesign needed opus-class work), OR
+- on a security / payments / data-integrity surface.
+
+Log the escalation choice (and which trigger fired) to `${DEFERRED_DECISIONS_PATH}` with `confidence: high, needs_human_review: no`.
 
 **Coordinator note:** Save worktree branch/path from result for Step 9. If Step 8 was skipped (no Critical/High action items from Step 7), also skip Step 9.
 
@@ -1233,9 +1240,13 @@ After ALL stories complete (or fail):
 | Step 2: Elicitation | opus | — | Method selection requires nuanced judgment; input capped to description + ACs + Tasks/Subtasks + epic-context cache |
 | Step 3: Validate (BMAD checklist runner) | sonnet | — | Mechanical 8-step checklist execution against the story spec; sonnet is the second opinion (different model from Step 1 opus = real diversity), and checklist work doesn't need opus reasoning |
 | Step 4: TDD E2E | sonnet | — | E2E test generation from ACs, speed matters |
-| Step 5: Implementation | opus | **worktree** | Longest step, worktree enables parallel execution across stories; Amelia writes Kent-Beck-style unit tests inline |
-| Step 6: Merge impl | **opus** | — | **BMAD Dev Agent (Amelia)** — senior engineer merge judgment, conflict resolution, post-merge verification (NO auto-commit) |
+| Step 5: Implementation | opus | **worktree** | Longest step and the core deliverable — every measured run used opus; rework from a weaker implementation costs more than the tier delta. Amelia writes Kent-Beck-style unit tests inline |
+| Step 6: Merge impl | **opus** | — | **BMAD Dev Agent (Amelia)** — cross-story conflict resolution is the judgment-heavy case. Only spawns in parallel mode (sequential runs skip Steps 6/9 merges entirely), so its cost is zero on linear sprints |
 | Step 7: Consolidated review | opus | — | BMAD 6.4 runs Blind Hunter + Edge Case Hunter + Acceptance Auditor internally; Acceptance Auditor's per-AC verdict supplants the dropped AC-trace step |
-| Step 8: Fixes | opus | **worktree** | Targeted fixes for Critical/High items in isolation, parallelizable across stories |
+| Step 8: Fixes | sonnet → opus on escalation | **worktree** | Severity-adaptive: sonnet handled routine fix batches fine in measured sprints; opus for Critical, redesign-scope, or security/payment-surface items (see Step 8 escalation rule) |
 | Step 9: Merge fixes + auto-commit | **sonnet** | — | **BMAD Dev Agent (Amelia)** — same merge protocol as Step 6 PLUS the per-story auto-commit sequence. Downgraded from opus: 22/22 stories were pure git mechanics; ambiguous conflicts still hard-pause |
 | Step 10: Sprint status | coordinator | — | Coordinator-inline YAML edit + grep verify per story; ONE `/bmad-sprint-status` reconcile agent (sonnet) at epic close-out |
+
+**Coordinator model:** the coordinator is not spawned — it is whatever model runs this skill. Run sprints from a session on the most capable tier available (frontier/Fable-class when offered): the coordinator's routing, tier resolution, severity triage, Step 8 escalation calls, merge gating, liveness nudges, and inline status edits gate every step, and its judgment errors compound across the whole sprint. Agent `model:` fields above are relative tiers, not absolute versions — when the model lineup shifts, re-map by role (strongest = judgment steps, mid = mechanical generation/verification, cheapest = rubric matching) rather than by name.
+
+**Assignment rationale (data-driven, 2026-07-15):** opus where judgment errors compound downstream (authoring 1/2, implementation 5, conflict merges 6, review 7, escalated fixes 8); sonnet where the work is mechanical or generation-checked-by-a-later-gate (validation 3, E2E generation 4, routine fixes 8, merge-fix mechanics 9, close-out reconcile); haiku for pure rubric matching (1.5). The measured sprints ran a deliberately beefed-up config; this table is the settled post-data allocation.
