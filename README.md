@@ -14,10 +14,11 @@ Scripts are organized by exact BMAD version. The installer auto-detects your BMA
 | `6.4.0` | 6.4.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Skill renames, 9-step pipeline, unattended-by-default, anti-leak commits, auto-commit (incl. submodules), deferred-decisions log, epic-context cache |
 | `6.6.0` | 6.6.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `project_name` → `core/config.yaml` (#2348); tier-adaptive pipeline (lite/standard/full classifier) |
 | `6.8.0` | 6.8.0       | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | `.claude/skills/` support-file path fix (`${BMAD_SKILLS_ROOT}`); `baseline_commit` review-scope guard (#2403); `project_context` (#2422); token-data tuning (Haiku classifier, Sonnet Step 9, Step 10 fold); always-on token-usage log |
+| `6.10.0`| 6.10.0      | `enhanced-automated-sprint.md`, `claude-hotfix-interaction-style.md` | Subagent standing authorization for Steps 1/7; severity remapped to BMAD's `low`/`medium`/`high` (#2523) with blast-radius escalation; `action_items:` preserve-don't-touch (6.9); Step 7 token-baseline break (#2524/#2525) |
 
 Root-level files are kept as a fallback for the latest version.
 
-> **Note:** No `6.3.0/`, `6.5.0/`, or `6.7.0/` folder is shipped — those users fall through the compatibility chain to the nearest lower version (6.3.x → `6.2.0`, 6.5.x → `6.4.0`, 6.7.x → `6.6.0`). This fork is personal and the user runs the latest BMAD directly.
+> **Note:** No `6.3.0/`, `6.5.0/`, `6.7.0/`, or `6.9.0/` folder is shipped — those users fall through the compatibility chain to the nearest lower version (6.3.x → `6.2.0`, 6.5.x → `6.4.0`, 6.7.x → `6.6.0`, 6.9.x → `6.8.0`). This fork is personal and the user runs the latest BMAD directly.
 
 ### BMAD 6.2 Architecture Change
 
@@ -46,6 +47,19 @@ This is a personal fork; the new behaviors below are baked-in **defaults with no
 
 - **Config-source split (#2348)** — `project_name` moved from `_bmad/bmm/config.yaml` to `_bmad/core/config.yaml` (auto-migrated on upgrade). Phase 0 reads both files and prefers the `core` copy when both exist.
 - **Tier-adaptive pipeline** — a Sonnet classifier (Step 1.5) assigns each story a tier (`lite` / `standard` / `full`) that decides which downstream steps run. `lite` skips elicitation/validation/E2E TDD; `standard` (the default) skips only elicitation; `full` runs everything. New `STORY_ID:tier` suffix and global `--tier=` flag override the classifier (its recommendation is still logged). Tier is driven by File-List size and risk markers, not AC count.
+
+### What's new in 6.10.0
+
+The pipeline **interface is unchanged 6.8 → 6.10.** This was verified by diffing the BMAD-METHOD tags `v6.8.0..v6.10.0` directly rather than reading the changelog: all nine invoked skills keep their names, the `.claude/skills` install target is untouched, all three explicit-path support files stay put, `tools/installer/core/config.js` is byte-identical (so `_bmad/core/config.yaml` + `_bmad/bmm/config.yaml` are still generated — the four-layer TOML resolver already existed at 6.8), and `bmad-dev-story` plus code-review's `step-01-gather-context.md` are entirely unchanged, so `baseline_commit` handling and the 6.8 review-scope guard remain correct as written. The 6.9/6.10 breaking changes — `bmad-automator` → `bmad-loop`, `bmad-investigate` retired, `bmad-create-architecture` → `bmad-architecture` — are all surfaces the sprint does not consume.
+
+Four changes were still worth making:
+
+- **Subagent standing authorization** — 6.10 added an *"…ask once now for the whole workflow run"* subagent-permission line to both `bmad-create-story/SKILL.md` and `bmad-code-review/SKILL.md`. Steps 1 and 7 invoke those skills **inside Task agents, which cannot prompt a user**, and Step 7 is already this pipeline's #1 stall source (4 incidents across 3 measured sprints). Both prompts now grant that authorization up front and explicitly forbid BMAD's write-prompt-files-and-HALT fallback.
+- **Severity taxonomy remap (#2523)** — BMAD's triage now emits only `low`/`medium`/`high`, discards severity assigned by the individual review subagents, requires reading call sites and guards before rating, and drops the old "prefer conservative when uncertain" tie-breaker. There is no `critical` band, so Step 8's Opus-escalation trigger keyed on *"Critical severity"* was dead code. Steps 7/8 and Decision Point #4 now speak `low`/`medium`/`high`, and escalation is re-derived from what that trigger was actually proxying for: **blast radius** (security / authn / payments / data integrity — now an explicit per-finding boolean returned by Step 7) and **redesign scope**. Expect fewer items to reach Step 8; that is the intended upstream effect, and the skill explicitly instructs against compensating for it.
+- **`action_items:` in `sprint-status.yaml` (6.9)** — a retrospective-owned top-level list with its own status enum (`open`/`in-progress`/`done`). Step 10's surgical status-field flip already preserves it; that is now stated explicitly so the coordinator doesn't read an unfamiliar key as schema drift, strip it, or fail it against the story-status vocabulary. The epic close-out reconcile's new "Open Action Items" block is documented as expected output.
+- **Step 7 token-baseline break** — the standalone deletion-contract auditor was folded into Edge Case Hunter (#2525), which also gained a named-set generalization pass at a measured **+19% tokens/run** (#2524). Step 7 averages from ≤6.8 sprints are no longer comparable, and the token-usage log now says so, so the next tuning pass doesn't misread a spec change as a regression. Steps 1/1.5/2/3/4/5/6/8/9 baselines are unaffected.
+
+> **Looking ahead:** BMAD **v7 will require `uv run`** for every skill that shells out to Python (`python3` still works at 6.10 and only warns). That — not 6.10 — is the upgrade that will force real work on this skill. Also worth watching: 6.10 ships `bmad-loop` / `bmad-dev-auto`, BMAD's own unattended dev orchestrator. It is an opt-in module, not installed by default, and does not conflict — but it now occupies the same lane as this pipeline.
 
 ### What's new in 6.8.0
 

@@ -160,7 +160,7 @@ d = json.load(open('$COMPAT_TMP'))
 latest = d.get('latest', '')
 print('Available versions:')
 print()
-for ver, info in sorted(d.get('versions', {}).items()):
+for ver, info in sorted(d.get('versions', {}).items(), key=lambda kv: tuple(int(x) for x in kv[0].split('.'))):
     marker = ' (latest)' if ver == latest else ''
     scripts = ', '.join(info.get('scripts', []))
     changelog = info.get('changelog', 'No changelog')
